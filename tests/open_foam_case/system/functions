@@ -1,0 +1,70 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     | Website:  https://openfoam.org
+    \\  /    A nd           | Version:  12
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    format      ascii;
+    class       dictionary;
+    location    "system";
+    object      functions;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+continuityError1
+{
+    type coded;
+
+    // Load the library containing the 'coded' functionObject
+    libs            ("libutilityFunctionObjects.so");
+
+    codeInclude
+    #{
+        #include "volFields.H"
+        #include "fvc.H"
+    #};
+
+    codeExecute
+    #{
+
+      const fvMesh& mesh = refCast<const fvMesh>(obr_);
+      //const volVectorField& U = mesh.lookupObject<volVectorField>("U");
+      
+
+      const volVectorField* UPtr  = new volVectorField
+        (
+            IOobject
+            (
+                "U",
+                mesh.time().name(),
+                mesh,
+                IOobject::MUST_READ,
+                IOobject::NO_WRITE
+            ),
+            mesh
+        );
+      
+      const volVectorField& U = *UPtr;
+      //const_cast<fvMesh&>(mesh).objectRegistry::store(UPtr);
+      volVectorField lapU
+        (
+            IOobject
+            (
+                "lapU",
+                mesh().time().name(),
+                mesh,
+                IOobject::NO_READ,
+                IOobject::AUTO_WRITE
+            ),
+            fvc::laplacian(U)
+        );
+
+      lapU.write();
+      Info << "U boundary types: " << U.boundaryField().types() << endl;
+      Info << "Laplacian scheme: " << mesh.schemes().subDict("laplacianSchemes") << endl;
+      Info << "Calculated and wrote lapU field" << endl;
+    #};
+}
