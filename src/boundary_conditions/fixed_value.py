@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-def fixed_value_bc(field: torch.tensor, 
+def fixed_value_bc(grad_field: torch.tensor, 
                    owner: torch.tensor,
                    bc_patch: dict,
                    order = 1,
@@ -12,9 +12,9 @@ def fixed_value_bc(field: torch.tensor,
     With the flux calculation of each boundary face.
     '''
 
-    batch_size = field.shape[0]
-    channels = field.shape[-1]
-    time_dim = field.shape[1]
+    batch_size = grad_field.shape[0]
+    channels = grad_field.shape[-1]
+    time_dim = grad_field.shape[1]
     n_faces = len(owner)
     device = owner.device
 
@@ -26,6 +26,7 @@ def fixed_value_bc(field: torch.tensor,
                                      device=device
                                     ).reshape(1,1,1,-1).repeat(batch_size,time_dim,n_faces,1)
     if order == 2:
+        return
         raise NotImplementedError
         # need to find the unit vector of the perpendicular distance from cell to face
         d_vec = torch.tensor(self.cell_coords, dtype = self.face_normals.dtype)[owner_patch] - self.face_centres[face_keys_idx]

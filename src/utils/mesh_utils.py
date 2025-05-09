@@ -47,4 +47,5 @@ def compute_face_area(face_pts, points):
     return area
 
 def detect_dimension(mesh):
-    pass
+    print('mesh.utils.detect_dimension needs work')
+    return 3

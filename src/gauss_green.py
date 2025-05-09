@@ -1,8 +1,8 @@
 import torch
 import vtk
 import numpy
-from utils.mesh_utils import *
-from boundary_conditions import get_boundary_flux
+from .utils.mesh_utils import *
+from .boundary_conditions import get_boundary_flux
 
 class gaus_green_vfm_mesh():
     def __init__(self, vtk_file_reader) -> None:
@@ -22,11 +22,39 @@ class gaus_green_vfm_mesh():
         self.cell_volume = self.mesh["Volume"]
 
         self.device = torch.device('cpu')
+
+        # Custom face owner/neighbour indices and area/normals
+        self.fetch_faces()
+        self.cell2cell_face_intercepts()
+        self.convert_to_tensor(dtype=torch.float32)
+
+        try:
+            # TODO: replace this with VTK Boundary finder
+            self.boundaries = vtk_file_reader.read()['boundary']
+        except:
+            self.boundaries = None
+            print('No Boundary Patches Found')
+            
+        # Area Vectors for FVM Calculation
+        self.compute_face_area_vectors()
     
+    def convert_to_tensor(self, dtype=torch.float32) -> None:
+        self.owner          = torch.tensor(self.owner)        
+        self.neighbour       = torch.tensor(self.neighbour)
+        self.face_areas     = torch.tensor(self.face_areas, dtype = dtype)
+        self.face_normals   = torch.tensor(self.face_normals, dtype = dtype)
+        self.cell_volumes   = torch.tensor(self.cell_volume, dtype = dtype)
+        self.interp_ws      = torch.tensor(self.interp_ws, dtype = dtype).reshape(1,1,-1,1)
+
     def to(self, device: torch.device) -> None:
         self.device = device
-        #TODO: convert to device here
-
+        self.owner.to(device)    
+        self.neighbour.to(device)
+        self.face_areas.to(device)
+        self.face_normals.to(device)
+        self.cell_volumes.to(device)
+        self.interp_ws.to(device)
+        
     def fetch_faces(self) -> None:
         self.faces_dict = {}
         self.owner = []
@@ -82,7 +110,7 @@ class gaus_green_vfm_mesh():
             # Line direction vector
             
             owner_cell_coord = self.cell_coords[self.owner[face_key]] 
-            neighbour_cell_coord = self.cell_coords[self.neighbor[face_key]]
+            neighbour_cell_coord = self.cell_coords[self.neighbour[face_key]]
             line_dir = owner_cell_coord - neighbour_cell_coord
 
             denominator = A * line_dir[0] + B * line_dir[1] + C * line_dir[2]
@@ -137,9 +165,7 @@ class gaus_green_vfm_mesh():
 
     def compute_unweighted_gradient(self, field_values:torch.tensor) -> torch.tensor:
 
-        # reshape into time dim for function universality
-        if len(field_values.shape) == 3:
-            field_values = field_values.unsqueeze(1)    # (Batch, Time, Nodes, Channel)
+        
 
         assert len(field_values.shape) == 4
         assert field_values.shape[2] == self.n_cells
@@ -160,7 +186,7 @@ class gaus_green_vfm_mesh():
         # Compute Flux
         phi_o = field_values[...,self.owner[idx],:]
         phi_n = field_values[...,self.neighbour[idx],:]
-        dphi = phi_o*self.interp_ws[idx] + phi_n*(1-self.interp_ws[idx])
+        dphi = phi_o*self.interp_ws[...,idx,:] + phi_n*(1-self.interp_ws[...,idx,:])
 
         flux = torch.einsum('itjk,ijl->itjkl', dphi, self.Sf[:,idx,:])
 
@@ -171,6 +197,10 @@ class gaus_green_vfm_mesh():
     
     def apply_volume_correction(self, grad_field: torch.tensor) -> torch.tensor:
         return grad_field / self.cell_volumes.reshape(1,1,-1,1,1)
+
+    def add_bc_conditions(self, dict):
+        # TODO: this needs to be replaced by something more automated or in init file
+        self.bc_conditions = dict
 
     def add_BC_to_flux(self, grad_field: torch.tensor, field_type: str, field_values: torch.tensor=None, order=1) -> torch.tensor:
         assert field_type is not None
@@ -183,19 +213,24 @@ class gaus_green_vfm_mesh():
                                                   bc_patch = self.bc_conditions[field_type][patch],
                                                   owner = self.owner[face_keys_idx],
                                                   order = order,
-                                                  face_normals_patch = self.face_normals[face_keys_idx],
-                                                  dtype = torch.float32)
+                                                  face_normals_patch = self.face_normals[face_keys_idx])
             
             if bc_values_at_face is not None:
+                print(patch, bc_values_at_face.shape, self.Sf[...,face_keys_idx,:].shape,  self.Sf.shape)
                 bc_flux = torch.einsum('itjk,ijl->itjkl', bc_values_at_face, self.Sf[...,face_keys_idx,:])
                 grad_field.index_add_(2, self.owner[face_keys_idx], bc_flux)
         
         return grad_field
     
     def compute_derivative(self, field: torch.tensor, field_type:str=None, order:int=1) -> torch.tensor:
+        
+        # reshape into time dim for function universality
+        if len(field.shape) == 3:
+            field = field.unsqueeze(1)    # (Batch, Time, Nodes, Channel)
+        
         grad_field = self.compute_unweighted_gradient(field)
         
-        if self.boundary_condition:
+        if self.boundaries:
             assert field_type is not None
             grad_field = self.add_BC_to_flux(grad_field, field_type, field, order=order)
         

@@ -58,7 +58,7 @@ if __name__ == '__main__':
     plotting = True
     interactive = True
     comparison = 'OpenFoam' # Can do 'VTK' but this is less accurate
-
+    nu = 0.0133
     '''
     NOTE: for comparison, you need to generate the files in OpenFoam, such as Grad(U) and Laplacian.
     The Laplacian in OpenFoam comes multiplied by the stress coefficient (e.g. 1/Re).
@@ -73,6 +73,7 @@ if __name__ == '__main__':
     
     # init Mesh
     mesh = gaus_green_vfm_mesh(vtk_file_reader)
+    mesh.add_bc_conditions(bc_dict)
     mesh.patch_face_keys_dict(exclusion_list=['front', 'back'])
     
     # we will source the VTK mesh within the gaus_green_vfm_mesh object as it has an active pointer
@@ -92,25 +93,47 @@ if __name__ == '__main__':
     pred_der = mesh.compute_derivative(field, field_type='U', order=1)[0,...]
     pred_der_2nd = mesh.compute_derivative(pred_der.unsqueeze(0), field_type='U', order=2)[0,...]
 
-
+    # Calculate Laplacian:
+    #['du/dxx', 'du/dyx', 'du/dzx','du/dxy', 'du/dyy', 'du/dzy','du/dxz', 'du/dyz', 'du/dzz',
+    # 'dv/dxx', 'dv/dyx', 'dv/dzx','dv/dxy', 'dv/dyy', 'dv/dzy','dv/dxz', 'dv/dyz', 'dv/dzz',
+    # 'dw/dxx', 'dw/dyx', 'dw/dzx','dw/dxy', 'dw/dyy', 'dw/dzy','dw/dxz', 'dw/dyz', 'dw/dzz']
+    pred_lap = []
+    exclude_3d = False
+    for i in [0,9,18]:
+        if exclude_3d:
+            lap = pred_der_2nd[:,i] + pred_der_2nd[:,i+4] + pred_der_2nd[:,i+4]
+        else: 
+            lap = pred_der_2nd[:,i] + pred_der_2nd[:,i+4] + pred_der_2nd[:,i+4] + pred_der_2nd[:,i+8]
+        pred_lap.append(lap.unsqueeze(-1))
+    pred_lap = torch.cat(pred_lap, dim=-1)*nu
+    
     # Get the directory where the current script is located
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    results_dir_base = script_dir.split('/')[:-2]+'/results'
+    results_dir_base = '\\'.join(os.path.split(script_dir))+'/results'
     
     # First derivatives:
     if plotting:
-        if not interactive:
-            results_dir = results_dir_base + '/first_derivatives'
-            os.makedirs(results_dir_base, exist_ok=True) 
+        results_dir = results_dir_base + '/first_derivatives'
         names = ['du/dx', 'du/dy', 'du/dz','dv/dx', 'dv/dy', 'dv/dz', 'dw/dx', 'dw/dy', 'dw/dz']
         for i in range(9):
             plot_comparison(mesh.mesh,
                             results_dir,
                             f'Cylinder_{names[i]}',
                             ground_truth = ground_truth_derivatives,
-                            prediction = pred_der,
+                            prediction = pred_der.detach().numpy(),
                             i=i,
-                            clims = [-5,5],
                             interactive = False
                             )
-        
+    
+    # Second derivatives:
+        results_dir = results_dir_base + '/second_derivatives'
+        names = ['Lap_U', 'Lap_V', 'Lap_W']
+        for i in range(3):
+            plot_comparison(mesh.mesh,
+                            results_dir,
+                            f'Cylinder_{names[i]}',
+                            ground_truth = ground_truth_laplacian,
+                            prediction = pred_lap.detach().numpy(),
+                            i=i,
+                            interactive = False
+                            )
