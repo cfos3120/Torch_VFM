@@ -89,22 +89,31 @@ if __name__ == '__main__':
         ground_truth_laplacian = mesh.mesh['lapU']
 
     # get example solution
-    field = torch.tensor(mesh.mesh['U'],dtype=torch.float32).unsqueeze(0)
+    field = torch.tensor(mesh.mesh['U'],dtype=torch.float32).unsqueeze(0)[...,:2]
     pred_der = mesh.compute_derivative(field, field_type='U', order=1)[0,...]
     pred_der_2nd = mesh.compute_derivative(pred_der.unsqueeze(0), field_type='U', order=2)[0,...]
 
-    # Calculate Laplacian:
+    # Calculate Laplacian: 3D
     #['du/dxx', 'du/dyx', 'du/dzx','du/dxy', 'du/dyy', 'du/dzy','du/dxz', 'du/dyz', 'du/dzz',
     # 'dv/dxx', 'dv/dyx', 'dv/dzx','dv/dxy', 'dv/dyy', 'dv/dzy','dv/dxz', 'dv/dyz', 'dv/dzz',
     # 'dw/dxx', 'dw/dyx', 'dw/dzx','dw/dxy', 'dw/dyy', 'dw/dzy','dw/dxz', 'dw/dyz', 'dw/dzz']
+    # 2D:
+    #['du/dxx', 'du/dyx','du/dxy', 'du/dyy',
+    # 'dv/dxx', 'dv/dyx','dv/dxy', 'dv/dyy']
     pred_lap = []
     exclude_3d = False
-    for i in [0,9,18]:
-        if exclude_3d:
-            lap = pred_der_2nd[:,i] + pred_der_2nd[:,i+4] + pred_der_2nd[:,i+4]
-        else: 
-            lap = pred_der_2nd[:,i] + pred_der_2nd[:,i+4] + pred_der_2nd[:,i+4] + pred_der_2nd[:,i+8]
-        pred_lap.append(lap.unsqueeze(-1))
+
+    if mesh.dim == 3:
+        for i in [0,9,18]:
+            if exclude_3d:
+                lap = pred_der_2nd[:,i] + pred_der_2nd[:,i+4]
+            else: 
+                lap = pred_der_2nd[:,i] + pred_der_2nd[:,i+4] + pred_der_2nd[:,i+8]
+            pred_lap.append(lap.unsqueeze(-1))
+    else:
+        for i in [0,4]:
+            lap = pred_der_2nd[:,i] + pred_der_2nd[:,i+3]
+            pred_lap.append(lap.unsqueeze(-1))
     pred_lap = torch.cat(pred_lap, dim=-1)*nu
     
     # Get the directory where the current script is located
@@ -113,9 +122,12 @@ if __name__ == '__main__':
     
     # First derivatives:
     if plotting:
-        results_dir = results_dir_base + '/first_derivatives'
-        names = ['du/dx', 'du/dy', 'du/dz','dv/dx', 'dv/dy', 'dv/dz', 'dw/dx', 'dw/dy', 'dw/dz']
-        for i in range(9):
+        results_dir = results_dir_base + '/first_derivatives_v2'
+        if mesh.dim == 3:
+            names = ['du/dx', 'du/dy', 'du/dz','dv/dx', 'dv/dy', 'dv/dz', 'dw/dx', 'dw/dy', 'dw/dz']
+        else:
+            names = ['du/dx', 'du/dy','dv/dx', 'dv/dy']
+        for i in range(pred_der.shape[-1]):
             plot_comparison(mesh.mesh,
                             results_dir,
                             f'Cylinder_{names[i]}',
@@ -126,9 +138,9 @@ if __name__ == '__main__':
                             )
     
     # Second derivatives:
-        results_dir = results_dir_base + '/second_derivatives'
+        results_dir = results_dir_base + '/second_derivatives_v2'
         names = ['Lap_U', 'Lap_V', 'Lap_W']
-        for i in range(3):
+        for i in range(pred_lap.shape[-1]):
             plot_comparison(mesh.mesh,
                             results_dir,
                             f'Cylinder_{names[i]}',

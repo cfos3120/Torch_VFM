@@ -46,6 +46,12 @@ def compute_face_area(face_pts, points):
         area += np.linalg.norm(np.cross(v1, v2)) / 2
     return area
 
-def detect_dimension(mesh):
-    print('mesh.utils.detect_dimension needs work')
-    return 3
+def detect_dimension(cell_coordinates):
+    spatial_dims_list = np.all(cell_coordinates == cell_coordinates[0, :], axis=0)
+    spatial_dims_list = np.where(~spatial_dims_list)[0].tolist()
+    if len(spatial_dims_list) == 2:
+        print('Excluding Z-dim in mesh')
+    """
+    TODO: Return the index list instead, and cut off the dims, to handle meshes, where Y or X is the empty dim
+    """
+    return len(spatial_dims_list)

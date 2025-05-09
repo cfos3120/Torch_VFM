@@ -12,12 +12,12 @@ class gaus_green_vfm_mesh():
         vtk_file_reader.cell_to_point_creation = False
         vtk_file_reader.enable_all_patch_arrays()
         self.mesh = vtk_file_reader.read()[0]
-        self.dim = detect_dimension(self.mesh)
 
         # Mesh readily available components
         self.points = np.array(self.mesh.points)
         self.n_cells = self.mesh.n_cells
         self.cell_coords = self.mesh.cell_centers().points
+        self.dim = detect_dimension(self.cell_coords)
         self.mesh = self.mesh.compute_cell_sizes()
         self.cell_volume = self.mesh["Volume"]
 
@@ -95,7 +95,7 @@ class gaus_green_vfm_mesh():
         self.neighbour      = np.array(self.neighbour)
         self.face_normals   = np.array(self.face_normals)[...,:self.dim]
         self.face_areas     = np.array(self.face_areas)
-        self.cell_volume        = np.array(self.cell_volume)
+        self.cell_volume    = np.array(self.cell_volume)
     
     def cell2cell_face_intercepts(self) -> None:
         
@@ -119,7 +119,7 @@ class gaus_green_vfm_mesh():
             intersect_coord = owner_cell_coord + t * line_dir
             interp_w = np.linalg.norm(intersect_coord - neighbour_cell_coord) / np.linalg.norm(owner_cell_coord - neighbour_cell_coord)
             
-            self.face_intersects[face_key,:] = intersect_coord
+            self.face_intersects[face_key,:] = intersect_coord[:self.dim]
             self.interp_ws[face_key] = interp_w
             
         print(f'Calculating Cell2Cell at Face Linear Interpolation Weights (L2):\n  min w:{np.min(self.interp_ws[self.internal_faces_idx]):.4f}, \
@@ -129,23 +129,31 @@ class gaus_green_vfm_mesh():
         # TODO: calculate difference from intercept to face centre as %, display min, max, mean
         print(f'Assessing Linear Intercept Skew From Face Centroid:\n TBD...')
 
-    def patch_face_keys_dict(self, exclusion_list=None) -> None:
+    def patch_face_keys_dict(self, exclusion_list:list=[]) -> None:
         print('Collocating Boundary Patches to Cell Faces')
 
-        if exclusion_list:
-            print(f' Excluding the Patches: {", ".join(exclusion_list)}')
-            self.patch_face_keys = dict.fromkeys([x for x in self.boundaries.keys() if x not in exclusion_list])
-        else:
-            self.patch_face_keys = dict.fromkeys(self.boundaries.keys())
+        self.patch_face_keys = dict.fromkeys(self.boundaries.keys())
 
         for patch in self.patch_face_keys:
             patch_face_idx = self.find_bc_face_idx(patch)
-            self.patch_face_keys[patch] = np.array(patch_face_idx)
+            
+            if patch_face_idx is None or patch in exclusion_list:
+                print(f'Excluding Z-axis patch {patch}')
+                exclusion_list.append(patch)
+            else:
+                self.patch_face_keys[patch] = np.array(patch_face_idx)
+
+        for patch in set(exclusion_list):
+            del self.patch_face_keys[patch]
+        
     
     def find_bc_face_idx(self, patch) -> tuple:
         assert len(self.boundary_faces_idx) > 0
 
         patch_points = np.array(self.boundaries[patch].points)
+        if self.dim == 2 and np.all(patch_points[:, -1] == patch_points[0, -1], axis=0):
+            return None
+            
         patch_point_indices = find_indices_dict(patch_points, self.points)
         
         patch_face_keys= []
@@ -216,8 +224,8 @@ class gaus_green_vfm_mesh():
                                                   face_normals_patch = self.face_normals[face_keys_idx])
             
             if bc_values_at_face is not None:
-                print(patch, bc_values_at_face.shape, self.Sf[...,face_keys_idx,:].shape,  self.Sf.shape)
-                bc_flux = torch.einsum('itjk,ijl->itjkl', bc_values_at_face, self.Sf[...,face_keys_idx,:])
+                # bc_values_at_face[...,:self.dim] may break if we do preassure as dim=1
+                bc_flux = torch.einsum('itjk,ijl->itjkl', bc_values_at_face[...,:self.dim], self.Sf[...,face_keys_idx,:])
                 grad_field.index_add_(2, self.owner[face_keys_idx], bc_flux)
         
         return grad_field
