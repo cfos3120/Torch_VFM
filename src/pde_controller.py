@@ -11,6 +11,7 @@ class pde_controller():
         file_name = config['mesh_file_pointer']
         self.vtk_file_reader = get_vtk_file_reader(file_name)
         self.mesh = gaus_green_vfm_mesh(self.vtk_file_reader)
+        self.device = 'cpu'
 
         # prepare mesh
         self.mesh.add_bc_conditions(get_bc_dict())
@@ -39,6 +40,9 @@ class pde_controller():
             self.limiters_dict = None
         assert set(self.enforcement_list).issubset(set(self.get_available_losses()))
 
+    def to(self,device):
+        self.device = device
+        self.mesh.to(device)
 
     def get_available_losses(self):
         available_losses = ['X-momentum Loss', 'Y-momentum Loss' ,'Continuity Loss', 'IC Loss']
@@ -49,7 +53,6 @@ class pde_controller():
     def balance_losses(self, method='mean'):
  
         if method == 'mean':
-            if self.verbose: print([self.loss_dict[key] for key in self.enforcement_list])
             total_loss = torch.stack([self.loss_dict[key] for key in self.enforcement_list]).sum()/len(self.loss_dict.keys())
         else:
             raise NotImplementedError
@@ -67,7 +70,6 @@ class pde_controller():
                                          field_type=channel,
                                          order=1)
             
-            if self.verbose: print('first derivative shape:',c_grad.shape)
             sub_dict = dict.fromkeys(gradient_str(channel,mesh_dim=self.mesh.dim, order=1))
             for i, name in zip(range(c_grad.shape[-1]),sub_dict.keys()):
                 sub_dict[name] = c_grad[...,i]
@@ -78,7 +80,6 @@ class pde_controller():
                 c_grad = self.mesh.compute_derivative(c_grad, 
                                                       field_type=channel,
                                                       order=2)
-                if self.verbose: print('second derivative shape:',c_grad.shape)
                 sub_dict = dict.fromkeys(gradient_str(channel,mesh_dim=self.mesh.dim, order=2))
                 for i, name in zip(range(c_grad.shape[-1]),sub_dict.keys()):
                     sub_dict[name] = c_grad[...,i]
@@ -102,7 +103,6 @@ class pde_controller():
             dt_out = (out[:,1:,...] - out[:,:-1,...])/time_step
             dt_out = torch.nn.functional.pad(dt_out, (0,0,0,0,1,0))
             if input_solution is not None:
-                print(dt_out.shape, 'compared to ', out.shape)
                 dt_out[:,0,...] = (out[:,0,...] - input_solution[:,-1,...])/time_step
             else:
                 # we can't calculate momentum on the first_time_step anyway
@@ -156,11 +156,6 @@ class pde_controller():
 
             if self.verbose: print('...Attempting to calculate PDE', flush=True)
             self.compute_pde_loss(out, input_solution, time_step, pred_grads, Re)
-
-        if self.verbose:
-            print('\nLosses: Before balancing, limiting and excluding:')
-            for key, value in self.loss_dict.items():
-                print(' ', key, value)
 
         if self.limiters_dict is not None:
             self.apply_limiters()

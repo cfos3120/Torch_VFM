@@ -48,12 +48,13 @@ class gaus_green_vfm_mesh():
 
     def to(self, device: torch.device) -> None:
         self.device = device
-        self.owner.to(device)    
-        self.neighbour.to(device)
-        self.face_areas.to(device)
-        self.face_normals.to(device)
-        self.cell_volumes.to(device)
-        self.interp_ws.to(device)
+        self.owner = self.owner.to(device)    
+        self.neighbour = self.neighbour.to(device)
+        self.face_areas = self.face_areas.to(device)
+        self.face_normals = self.face_normals.to(device)
+        self.cell_volumes = self.cell_volumes.to(device)
+        self.interp_ws = self.interp_ws.to(device)
+        self.Sf = self.Sf.to(device)
         
     def fetch_faces(self) -> None:
         self.faces_dict = {}
@@ -173,11 +174,8 @@ class gaus_green_vfm_mesh():
 
     def compute_unweighted_gradient(self, field_values:torch.tensor) -> torch.tensor:
 
-        
-
         assert len(field_values.shape) == 4
-        assert field_values.shape[2] == self.n_cells
-        assert self.device == field_values.device
+        assert field_values.shape[-2] == self.n_cells
 
         batch_size = field_values.shape[0]
         channels = field_values.shape[-1]
@@ -245,5 +243,6 @@ class gaus_green_vfm_mesh():
         grad_field = self.apply_volume_correction(grad_field)
 
         if field.shape[1] == 1:
-            grad_field = grad_field.permute(0,1,2,4,3).squeeze(1).flatten(start_dim=2)
-        return grad_field
+            grad_field = grad_field.permute(0,1,2,4,3).squeeze(1)
+        
+        return grad_field.flatten(start_dim=-2)
