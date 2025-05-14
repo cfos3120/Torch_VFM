@@ -11,7 +11,7 @@ def navier_stokes_2d(solution_field:torch.tensor, solution_index:dict, Re:torch.
                  'Y-momentum']
     equations = dict.fromkeys(dict_keys)
 
-    assert len(Re.shape) == len(solution_field.shape)
+    assert len(Re.shape) == len(solution_field.shape)-1, f'{Re.shape} vs {solution_field.shape}'
 
     U = solution_field[...,solution_index['U']]
     
