@@ -15,16 +15,17 @@ class pde_controller():
 
         # prepare mesh
         self.mesh.add_bc_conditions(get_bc_dict())
-        self.mesh.patch_face_keys_dict(exclusion_list=['front', 'back'])
+        self.mesh.patch_face_keys_dict() 
 
         self.pde_equations = navier_stokes_2d # <- we can make this a map for other pdes
-        self.verbose = True
-        self.ic_loss = True
-        self.pde_loss = True
-        self.soblov_norms = False
+        self.verbose                = config['settings']['verbose']
+        self.pin_first_ts           = config['settings']['pin_first_ts']
+        self.ic_loss                = config['settings']['ic_loss']
+        self.pde_loss               = config['settings']['pde_loss']
+        self.mom_eqn_skip_first_ts  = config['settings']['mom_eqn_skip_first_ts']
+        self.soblov_norms           = config['settings']['soblov_norms']
 
         # indepenent control boolians:
-        self.mom_eqn_skip_first_ts = False
         self.Re = 150
         self.time_step = 0.05
         
@@ -103,7 +104,11 @@ class pde_controller():
             dt_out = (out[:,1:,...] - out[:,:-1,...])/time_step
             dt_out = torch.nn.functional.pad(dt_out, (0,0,0,0,1,0))
             if input_solution is not None:
-                dt_out[:,0,...] = (out[:,0,...] - input_solution[:,-1,...])/time_step
+                if self.pin_first_ts:
+                    index = -2
+                else:
+                    index = -1
+                dt_out[:,0,...] = (out[:,0,...] - input_solution[:,index,...])/time_step
             else:
                 # we can't calculate momentum on the first_time_step anyway
                 self.mom_eqn_skip_first_ts = True
@@ -152,7 +157,7 @@ class pde_controller():
         # PDE Loss
         if self.pde_loss:
             if Re is None and self.Re is not None: 
-                Re = torch.tensor(self.Re, dtype=torch.float32, device=out.device).reshape(1,1,1,1) # (batch,time,cells,channels)
+                Re = torch.tensor(self.Re, dtype=torch.float32, device=out.device).reshape(1,1,1) # (batch,time,cells,channels)
 
             if self.verbose: print('...Attempting to calculate PDE', flush=True)
             self.compute_pde_loss(out, input_solution, time_step, pred_grads, Re)
@@ -162,7 +167,7 @@ class pde_controller():
         return self.balance_losses()
 
     def compute_ic_loss(self, out:torch.tensor,input_solution=None,y=None):
-        if input_solution is not None:
+        if input_solution is not None and self.pin_first_ts:
             assert out.shape[-2] == input_solution.shape[-2]
             ic_loss = self.loss_fn(out[:,0,...], input_solution[:,-1,...])
         elif y is not None:
@@ -211,7 +216,8 @@ class pde_controller():
         condition that all equations have met their residual.
         '''
         for key, value in self.limiters_dict.items():
-            self.loss_dict[key] = torch.max(self.loss_dict[key], torch.tensor(value,dtype=torch.float32,device=self.device))
+            if key in self.enforcement_list:
+                self.loss_dict[key] = torch.max(self.loss_dict[key], torch.tensor(value,dtype=torch.float32,device=self.device))
         return
 
     def wandb_logging(self) -> dict:
