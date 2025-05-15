@@ -74,24 +74,23 @@ if __name__ == '__main__':
     # init Mesh
     mesh = gaus_green_vfm_mesh(vtk_file_reader)
     mesh.add_bc_conditions(bc_dict)
-    mesh.patch_face_keys_dict(exclusion_list=['front', 'back'])
+    mesh.patch_face_keys_dict()
     
     # we will source the VTK mesh within the gaus_green_vfm_mesh object as it has an active pointer
     if comparison == 'OpenFoam':
         ground_truth_derivatives = mesh.mesh['grad(U)']
         ground_truth_laplacian = mesh.mesh['lapU']
+        ground_truth_derivatives2 = np.concatenate((mesh.mesh['field0'], mesh.mesh['field1'], mesh.mesh['field2']), axis=-1) 
     elif comparison == 'VTK':
         vtk_calc = mesh.mesh.compute_derivative(scalars="U", gradient='Gradient_VTK', preference='cell')
         vtk_calc = vtk_calc.compute_derivative(scalars="Gradient_VTK", gradient='Gradient_2nd_VTK', preference='cell')
         ground_truth_derivatives = vtk_calc['Gradient_VTK']
         vtk_calc_2nd_dif = vtk_calc['Gradient_2nd_VTK']
-        raise NotImplementedError('need to align the correct indices between these methods')
-        ground_truth_laplacian = mesh.mesh['lapU']
 
     # get example solution
     field = torch.tensor(mesh.mesh['U'],dtype=torch.float32).unsqueeze(0)[...,:2]
     pred_der = mesh.compute_derivative(field, field_type='U', order=1)[0,...]
-    pred_der_2nd = mesh.compute_derivative(pred_der.unsqueeze(0), field_type='U', order=2)[0,...]
+    pred_der_2nd = mesh.compute_derivative(pred_der.unsqueeze(0), field_type='U', order=2, original_field=field)[0,...]
 
     # Calculate Laplacian: 3D
     #['du/dxx', 'du/dyx', 'du/dzx','du/dxy', 'du/dyy', 'du/dzy','du/dxz', 'du/dyz', 'du/dzz',
@@ -114,7 +113,7 @@ if __name__ == '__main__':
         for i in [0,4]:
             lap = pred_der_2nd[:,i] + pred_der_2nd[:,i+3]
             pred_lap.append(lap.unsqueeze(-1))
-    pred_lap = torch.cat(pred_lap, dim=-1)*nu
+    pred_lap = torch.cat(pred_lap, dim=-1)#*nu
     
     # Get the directory where the current script is located
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -122,30 +121,38 @@ if __name__ == '__main__':
     
     # First derivatives:
     if plotting:
-        results_dir = results_dir_base + '/first_derivatives_v2'
+        results_dir = results_dir_base + '/first_derivatives_v3'
         if mesh.dim == 3:
             names = ['du/dx', 'du/dy', 'du/dz','dv/dx', 'dv/dy', 'dv/dz', 'dw/dx', 'dw/dy', 'dw/dz']
         else:
             names = ['du/dx', 'du/dy','dv/dx', 'dv/dy']
-        for i in range(pred_der.shape[-1]):
-            plot_comparison(mesh.mesh,
-                            results_dir,
-                            f'Cylinder_{names[i]}',
+        for i, j in zip(range(pred_der.shape[-1]), [0,1,3,4]):
+            plot_comparison(mesh.mesh, results_dir, f'Cylinder_{names[i]}',
                             ground_truth = ground_truth_derivatives,
                             prediction = pred_der.detach().numpy(),
-                            i=i,
-                            interactive = False
-                            )
+                            i=i,j=j, interactive = interactive)
     
     # Second derivatives:
-        results_dir = results_dir_base + '/second_derivatives_v2'
+        results_dir = results_dir_base + '/second_derivatives_v3'
         names = ['Lap_U', 'Lap_V', 'Lap_W']
         for i in range(pred_lap.shape[-1]):
-            plot_comparison(mesh.mesh,
-                            results_dir,
-                            f'Cylinder_{names[i]}',
-                            ground_truth = ground_truth_laplacian,
+            break
+            plot_comparison(mesh.mesh, results_dir, f'Cylinder_{names[i]}',
+                            ground_truth = pred_lap.detach().numpy(),
                             prediction = pred_lap.detach().numpy(),
-                            i=i,
-                            interactive = False
-                            )
+                            i=i, interactive = interactive)
+        
+        results_dir = results_dir_base + '/second_derivatives_v3/all'
+        indices_3d = np.array([0,4,9,13])
+        #['du/dxx', 'du/dyx','du/dxy', 'du/dyy',
+        # 'dv/dxx', 'dv/dyx','dv/dxy', 'dv/dyy']
+        indices_2d = np.array([0,3,4,7])
+        names = np.array(['du/dxx', 'du/dxy', 'du/dxz','du/dyx', 'du/dyy', 'du/dyz','du/dzx', 'du/dzy', 'du/dzz',
+                'dv/dxx', 'dv/dxy', 'dv/dxz','dv/dyx', 'dv/dyy', 'dv/dyz','dv/dzx', 'dv/dzy', 'dv/dzz',
+                'dw/dxx', 'dw/dxy', 'dw/dxz','dw/dyx', 'dw/dyy', 'dw/dyz','dw/dzx', 'dw/dzy', 'dw/dzz'])
+        print(ground_truth_derivatives2.shape, pred_der_2nd.shape)
+        for i,j in zip(indices_2d, indices_3d):
+            plot_comparison(mesh.mesh, results_dir, f'Cylinder_{names[j]}',
+                            ground_truth = ground_truth_derivatives2,
+                            prediction = pred_der_2nd.detach().numpy(),
+                            i=i, j=j, interactive = interactive)

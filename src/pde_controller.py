@@ -80,6 +80,7 @@ class pde_controller():
                 # second derivatives
                 c_grad = self.mesh.compute_derivative(c_grad, 
                                                       field_type=channel,
+                                                      original_field=solution[...,self.field_channel_idx_dict[channel]],
                                                       order=2)
                 sub_dict = dict.fromkeys(gradient_str(channel,mesh_dim=self.mesh.dim, order=2))
                 for i, name in zip(range(c_grad.shape[-1]),sub_dict.keys()):

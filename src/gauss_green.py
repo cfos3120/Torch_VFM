@@ -26,6 +26,7 @@ class gaus_green_vfm_mesh():
         # Custom face owner/neighbour indices and area/normals
         self.fetch_faces()
         self.cell2cell_face_intercepts()
+        self.cell2face_d_vec()
         self.convert_to_tensor(dtype=torch.float32)
 
         try:
@@ -40,11 +41,12 @@ class gaus_green_vfm_mesh():
     
     def convert_to_tensor(self, dtype=torch.float32) -> None:
         self.owner          = torch.tensor(self.owner)        
-        self.neighbour       = torch.tensor(self.neighbour)
+        self.neighbour      = torch.tensor(self.neighbour)
         self.face_areas     = torch.tensor(self.face_areas, dtype = dtype)
         self.face_normals   = torch.tensor(self.face_normals, dtype = dtype)
         self.cell_volumes   = torch.tensor(self.cell_volume, dtype = dtype)
         self.interp_ws      = torch.tensor(self.interp_ws, dtype = dtype).reshape(1,1,-1,1)
+        self.d_vec          = torch.tensor(self.d_vec, dtype = dtype)
 
     def to(self, device: torch.device) -> None:
         self.device = device
@@ -55,6 +57,7 @@ class gaus_green_vfm_mesh():
         self.cell_volumes = self.cell_volumes.to(device)
         self.interp_ws = self.interp_ws.to(device)
         self.Sf = self.Sf.to(device)
+        self.d_vec = self.d_vec.to(device)
         
     def fetch_faces(self) -> None:
         self.faces_dict = {}
@@ -129,6 +132,16 @@ class gaus_green_vfm_mesh():
         
         # TODO: calculate difference from intercept to face centre as %, display min, max, mean
         print(f'Assessing Linear Intercept Skew From Face Centroid:\n TBD...')
+
+    def cell2face_d_vec(self) -> None:
+        displacement = (self.face_centres - self.cell_coords[self.owner])[...,:self.dim]
+        #print(displacement.shape, self.face_normals.shape)
+        #self.d_vec = np.abs(np.sum(displacement * self.face_normals, axis=1, keepdims=True) * self.face_normals)
+        self.d_vec = displacement
+        #np.linalg.norm(displacement, axis=1, keepdims=True)
+        #print(self.d_vec.shape)
+        #raise KeyboardInterrupt
+        #self.d_vec = np.abs(np.sum(displacement[...,:self.dim] * self.face_normals, axis=1))
 
     def patch_face_keys_dict(self, exclusion_list:list=[]) -> None:
         print('Collocating Boundary Patches to Cell Faces')
@@ -206,9 +219,14 @@ class gaus_green_vfm_mesh():
 
     def add_bc_conditions(self, dict):
         # TODO: this needs to be replaced by something more automated or in init file
+        for key1 in dict: # U or P
+            for key2 in dict[key1]: # patch
+                if 'value' in dict[key1][key2].keys():
+                    if isinstance(dict[key1][key2]['value'], list):
+                        dict[key1][key2]['value'] = dict[key1][key2]['value'][:self.dim]
         self.bc_conditions = dict
 
-    def add_BC_to_flux(self, grad_field: torch.tensor, field_type: str, field_values: torch.tensor=None, order=1) -> torch.tensor:
+    def add_BC_to_flux(self, grad_field: torch.tensor, field_type: str, field_values: torch.tensor=None, order=1, original_field:torch.tensor=None) -> torch.tensor:
         assert field_type is not None
 
         for patch in self.patch_face_keys:
@@ -216,19 +234,21 @@ class gaus_green_vfm_mesh():
     
             bc_values_at_face = get_boundary_flux(grad_field = grad_field, 
                                                   field_values = field_values,
+                                                  original_field=original_field,
                                                   bc_patch = self.bc_conditions[field_type][patch],
                                                   owner = self.owner[face_keys_idx],
                                                   order = order,
+                                                  delta_d_vector  = self.d_vec[face_keys_idx],
                                                   face_normals_patch = self.face_normals[face_keys_idx])
             
             if bc_values_at_face is not None:
                 # bc_values_at_face[...,:self.dim] may break if we do preassure as dim=1
-                bc_flux = torch.einsum('itjk,ijl->itjkl', bc_values_at_face[...,:self.dim], self.Sf[...,face_keys_idx,:])
+                bc_flux = torch.einsum('itjk,ijl->itjkl', bc_values_at_face, self.Sf[...,face_keys_idx,:])
                 grad_field.index_add_(2, self.owner[face_keys_idx], bc_flux)
         
         return grad_field
     
-    def compute_derivative(self, field: torch.tensor, field_type:str=None, order:int=1) -> torch.tensor:
+    def compute_derivative(self, field: torch.tensor, field_type:str=None, order:int=1, original_field:torch.tensor=None) -> torch.tensor:
         
         # reshape into time dim for function universality
         if len(field.shape) == 3:
@@ -238,7 +258,7 @@ class gaus_green_vfm_mesh():
         
         if self.boundaries:
             assert field_type is not None
-            grad_field = self.add_BC_to_flux(grad_field, field_type, field, order=order)
+            grad_field = self.add_BC_to_flux(grad_field, field_type, field, order=order, original_field=original_field)
         
         grad_field = self.apply_volume_correction(grad_field)
 

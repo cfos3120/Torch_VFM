@@ -22,11 +22,21 @@ if __name__ == '__main__':
               'enforcement_list': ['Continuity Loss', 'IC Loss'],
               'equations_limiters' : {'Continuity Loss' : 0.001
                   },
-              'dataset_channels' : {'U': [0,1,2],
-                                    'p': [3]
+              'dataset_channels' : {'U': [0,1],
+                                    'p': [2]
                                     },
-              'pde_equation' : 'navier_stokes_2d'
-              }
+              'pde_equation' : 'navier_stokes_2d',
+              'settings': {
+                'verbose':                False,
+                'ic_loss':                True,
+                'pin_first_ts':           True,
+                'pde_loss':               True,
+                'mom_eqn_skip_first_ts':  False,
+                'soblov_norms':           False   # Not Implemented yet
+                },
+               'enforcement_list': ['IC Loss'],
+               'equations_limiters': {}
+            }
     
     print('Creating PDE Controller')
     pde_controller = pde_controller(config=config)
@@ -39,23 +49,23 @@ if __name__ == '__main__':
     # at t0 - Input Solution (batch, time, cells, channels)
     file_reader.set_active_time_value(file_reader.time_values[-1])
     mesh = file_reader.read()[0]
-    U = torch.tensor(mesh['U'],dtype=torch.float32) # for 3D
+    U = torch.tensor(mesh['U'],dtype=torch.float32)[...,:2] # for 2D
     p = torch.tensor(mesh['p'],dtype=torch.float32).unsqueeze(-1)
-    x_i = torch.cat([U,p],dim=-1).unsqueeze(0).unsqueeze(0)
+    x_i = torch.cat([U,p],dim=-1).unsqueeze(0)
 
     # at t1 - Output Solution (batch, time, cells, channels)
     file_reader.set_active_time_value(file_reader.time_values[-1])
     mesh = file_reader.read()[0]
-    U = torch.tensor(mesh['U'],dtype=torch.float32) # for 3D
+    U = torch.tensor(mesh['U'],dtype=torch.float32)[...,:2] # for 2D
     p = torch.tensor(mesh['p'],dtype=torch.float32).unsqueeze(-1)
-    y = torch.cat([U,p],dim=-1).unsqueeze(0).unsqueeze(0)
+    y = torch.cat([U,p],dim=-1).unsqueeze(0)
 
     # Model Inputs (batch, cells, space dims)
-    x = torch.tensor(mesh.cell_centers().points,dtype=torch.float32).unsqueeze(0)
+    x = torch.tensor(mesh.cell_centers().points,dtype=torch.float32).unsqueeze(0)[...,:2]
     print('Dataset created')
     
     # Initialize a Network
-    model = torch.nn.Sequential(torch.nn.Linear(3, 64),
+    model = torch.nn.Sequential(torch.nn.Linear(2, 64),
                                      torch.nn.ReLU(),
                                      torch.nn.Linear(64, 128),
                                      torch.nn.ReLU(),
@@ -71,7 +81,7 @@ if __name__ == '__main__':
                                      torch.nn.ReLU(),
                                      torch.nn.Linear(128, 64),
                                      torch.nn.ReLU(),
-                                     torch.nn.Linear(64, 4),
+                                     torch.nn.Linear(64, 3),
                                      torch.nn.ReLU()
                                      )
     print('Model initialized')

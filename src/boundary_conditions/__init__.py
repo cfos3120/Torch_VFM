@@ -15,6 +15,8 @@ def get_boundary_flux(bc_patch,
                       grad_field,
                       field_values,
                       owner,
+                      delta_d_vector,
+                      original_field,
                       face_normals_patch,
                       order=1):
 
@@ -32,6 +34,8 @@ def get_boundary_flux(bc_patch,
                                           bc_patch = bc_patch,
                                           owner = owner,
                                           order = order,
+                                          delta_d_vector = delta_d_vector,
+                                          original_field=original_field,
                                           face_normals_patch = face_normals_patch,
                                           dtype = torch.float32)
     return bc_values_at_face

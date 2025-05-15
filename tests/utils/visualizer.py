@@ -19,7 +19,7 @@ def scalar_bar(plotter, actor):
         shadow=True
     )
 
-def plot_comparison(mesh, file_location, file_name, ground_truth, prediction, i, j=None, interactive = True, clims = None, clims2 = None, show_mesh =False):
+def plot_comparison(mesh, file_location, file_name, ground_truth, prediction, i, j=None, interactive = True, clims = None, clims2 = None, clims3 = None, show_mesh =False):
     if j is None:
         j = i 
 
@@ -34,13 +34,19 @@ def plot_comparison(mesh, file_location, file_name, ground_truth, prediction, i,
 
     # comparison colour map:
     berlin_cmap = plt.get_cmap("bwr")
-    if clims2 is None:
-        abs_max = np.max(np.abs(mesh_for_plotting['Difference']))
-        clims2 = [-abs_max, abs_max]
-
     if clims is None:
-        abs_max = np.max(np.abs(mesh_for_plotting['Ground Truth']))
+        abs_max = np.max(np.abs(mesh_for_plotting['Torch FVM']))
         clims = [-abs_max, abs_max]
+    
+    if clims2 is None:
+        abs_max = np.max(np.abs(mesh_for_plotting['Ground Truth']))
+        clims2 = [-abs_max, abs_max]
+    
+    if clims3 is None:
+        abs_max = np.max(np.abs(mesh_for_plotting['Difference']))
+        clims3 = [-abs_max, abs_max]
+
+
 
     # Plot scalar1 in the first subplot
     plotter.subplot(0, 0)
@@ -62,7 +68,7 @@ def plot_comparison(mesh, file_location, file_name, ground_truth, prediction, i,
     actor = plotter.add_mesh(mesh_for_plotting, 
                      scalars='Ground Truth', 
                      cmap='viridis', 
-                     clim=clims, 
+                     clim=clims2, 
                      show_scalar_bar=False, 
                      show_edges=show_mesh, 
                      edge_opacity=0.25,
@@ -78,7 +84,7 @@ def plot_comparison(mesh, file_location, file_name, ground_truth, prediction, i,
     actor = plotter.add_mesh(mesh_for_plotting, 
                      scalars='Difference', 
                      cmap=berlin_cmap, 
-                     clim=clims2, 
+                     clim=clims3, 
                      show_scalar_bar=False, 
                      show_edges=show_mesh, 
                      edge_opacity=0.25,
