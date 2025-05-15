@@ -5,13 +5,23 @@ from .utils.mesh_utils import *
 from .boundary_conditions import get_boundary_flux
 
 class gaus_green_vfm_mesh():
-    def __init__(self, vtk_file_reader) -> None:
+    def __init__(self, vtk_file_reader, L=1) -> None:
         
         # Read in Mesh in VTK
         vtk_file_reader.set_active_time_value(vtk_file_reader.time_values[-1])
         vtk_file_reader.cell_to_point_creation = False
         vtk_file_reader.enable_all_patch_arrays()
-        self.mesh = vtk_file_reader.read()[0]
+        self.mesh = vtk_file_reader.read()[0].scale(1/L)
+
+        
+        try:
+            # TODO: replace this with VTK Boundary finder
+            self.boundaries = vtk_file_reader.read()['boundary']
+            for key in self.boundaries.keys():
+                self.boundaries[key] = self.boundaries[key].scale(1/L)
+        except:
+            self.boundaries = None
+            print('No Boundary Patches Found')
 
         # Mesh readily available components
         self.points = np.array(self.mesh.points)
@@ -29,13 +39,6 @@ class gaus_green_vfm_mesh():
         self.cell2face_d_vec()
         self.convert_to_tensor(dtype=torch.float32)
 
-        try:
-            # TODO: replace this with VTK Boundary finder
-            self.boundaries = vtk_file_reader.read()['boundary']
-        except:
-            self.boundaries = None
-            print('No Boundary Patches Found')
-            
         # Area Vectors for FVM Calculation
         self.compute_face_area_vectors()
     

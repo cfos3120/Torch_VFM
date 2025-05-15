@@ -10,7 +10,7 @@ class pde_controller():
         self.config = config
         file_name = config['mesh_file_pointer']
         self.vtk_file_reader = get_vtk_file_reader(file_name)
-        self.mesh = gaus_green_vfm_mesh(self.vtk_file_reader)
+        self.mesh = gaus_green_vfm_mesh(self.vtk_file_reader, L=config['length_scale'])
         self.device = 'cpu'
 
         # prepare mesh

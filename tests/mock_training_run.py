@@ -25,6 +25,7 @@ if __name__ == '__main__':
               'dataset_channels' : {'U': [0,1],
                                     'p': [2]
                                     },
+              'length_scale' : 2,
               'pde_equation' : 'navier_stokes_2d',
               'settings': {
                 'verbose':                False,
