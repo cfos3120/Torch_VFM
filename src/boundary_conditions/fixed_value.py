@@ -36,11 +36,9 @@ def fixed_value_bc(grad_field: torch.tensor,
         # The direction here may be wrong of the delta_d (should be pointing out of the cell, but difference is cell - face, might need to swap that)
         cell_values = original_field[...,owner,:]
         bc_values_at_face = (bc_values_at_face - cell_values)
-        print(bc_values_at_face.shape, delta_d_vector.shape)
         delta_d_vector = delta_d_vector.unsqueeze(0).unsqueeze(0)
         disp_norm_sq = (delta_d_vector ** 2).sum(dim=-1, keepdim=True)
         jacobian = bc_values_at_face.unsqueeze(-1) * delta_d_vector.unsqueeze(-2)
-        print(jacobian.shape, disp_norm_sq.shape)
         jacobian = jacobian / disp_norm_sq.unsqueeze(-1)
         bc_values_at_face = jacobian.flatten(start_dim=-2)
         

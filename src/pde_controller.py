@@ -24,6 +24,7 @@ class pde_controller():
         self.pde_loss               = config['settings']['pde_loss']
         self.mom_eqn_skip_first_ts  = config['settings']['mom_eqn_skip_first_ts']
         self.soblov_norms           = config['settings']['soblov_norms']
+        self.dt_scheme              = config['settings']['dt_scheme']
 
         # indepenent control boolians:
         self.Re = 150
@@ -89,7 +90,7 @@ class pde_controller():
         
         return gradient_dict
 
-    def get_temporal_gradients(self, out, time_step, input_solution=None, channel:str='U'):
+    def get_temporal_gradients(self, out, time_step, input_solution=None, channel:str='U', scheme:str='steady'):
         
         if time_step is None and self.time_step is not None:
             time_step = self.time_step
@@ -98,10 +99,11 @@ class pde_controller():
         
         dt_dict = dict.fromkeys(gradient_str(channel=channel, mesh_dim=self.mesh.dim,time_dim=True))
 
-        if len(out.shape) == 3:
-            for name in zip(dt_dict.keys()):
-                dt_dict[name] = 0
-        elif len(out.shape) == 4:
+        if scheme == 'steady':
+            assert len(out.shape) == 2
+            dt_dict[name] = 0
+        elif scheme == 'euler':
+            assert len(out.shape) == 4
             dt_out = (out[:,1:,...] - out[:,:-1,...])/time_step
             dt_out = torch.nn.functional.pad(dt_out, (0,0,0,0,1,0))
             if input_solution is not None:
@@ -113,11 +115,25 @@ class pde_controller():
             else:
                 # we can't calculate momentum on the first_time_step anyway
                 self.mom_eqn_skip_first_ts = True
-            
-            for i, name in zip(self.field_channel_idx_dict[channel],dt_dict.keys()):
-                dt_dict[name] = dt_out[...,i]
+        elif scheme == 'backward':   
+            assert len(out.shape) == 4
+            dt_out = ((3/2)*out[:,2:,...] - 2*out[:,1:-1,...] + (1/2)*out[:,:-2,...])/time_step
+            dt_out = torch.nn.functional.pad(dt_out, (0,0,0,0,2,0))
+            if input_solution is not None:
+                if self.pin_first_ts:
+                    index = -2
+                else:
+                    index = -1
+                dt_out[:,1,...] = (out[:,1,...] - 2*out[:,0,...] + (1/2)*input_solution[:,index,...])/time_step #- input_solution[:,index,...])/time_step
+                dt_out[:,0,...] = (out[:,0,...] - 2*input_solution[:,index,...] + (1/2)*input_solution[:,index-1,...])/time_step
+            else:
+                # we can't calculate momentum on the first_time_step anyway #this doesn't skip the first
+                self.mom_eqn_skip_first_ts = True
         else:
-            raise IndexError(f'Field has {len(out.shape)} dims, when 4 (time-variant) or 3 (time-invariant/zero) is expected')
+            raise KeyError(f'scheme {scheme} is not supported. Try steady, euler or backward')
+    
+        for i, name in zip(self.field_channel_idx_dict[channel],dt_dict.keys()):
+            dt_dict[name] = dt_out[...,i]
 
         return dt_dict
     
@@ -189,7 +205,7 @@ class pde_controller():
         if grad_dict is None:
             grad_dict = self.get_spatial_gradients(out)
         
-        grad_dict.update(self.get_temporal_gradients(out, time_step, input_solution))
+        grad_dict.update(self.get_temporal_gradients(out, time_step, input_solution, scheme=self.dt_scheme))
 
         eqn_dict = self.pde_equations(out, 
                                       solution_index=self.field_channel_idx_dict, 
