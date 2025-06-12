@@ -37,5 +37,5 @@ def get_boundary_flux(bc_patch,
                                           delta_d_vector = delta_d_vector,
                                           original_field=original_field,
                                           face_normals_patch = face_normals_patch,
-                                          dtype = torch.float32)
+                                          dtype = torch.float64)
     return bc_values_at_face

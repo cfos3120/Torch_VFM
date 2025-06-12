@@ -1,19 +1,35 @@
 import torch
 import vtk
-import numpy
-from .utils.mesh_utils import *
-from .boundary_conditions import get_boundary_flux
+import numpy as np
+import pyvista as pv
+#from .utils.mesh_utils import *
+#from .vfm_mesh import *
+#from .utils.data_utils import get_bc_dict
 
+import sys
+import os
+sys.path.insert(0, r'C:\Users\Noahc\Documents\USYD\PHD\8 - Github\Torch_VFM')
+from src.utils.mesh_utils import *
+from src.vfm_mesh import *
+from src.utils.data_utils import get_bc_dict
+
+        
 class gaus_green_vfm_mesh():
-    def __init__(self, vtk_file_reader, L=1) -> None:
+    def __init__(self, vtk_file_reader, L=1, device='cpu', dtype=torch.float32) -> None:
+
+        self.device = device
+        self.dtype = dtype
         
         # Read in Mesh in VTK
         vtk_file_reader.set_active_time_value(vtk_file_reader.time_values[-1])
         vtk_file_reader.cell_to_point_creation = False
         vtk_file_reader.enable_all_patch_arrays()
-        self.mesh = vtk_file_reader.read()[0].scale(1/L)
+        self.vtk_mesh = vtk_file_reader.read()[0].scale(1/L)
+    
+        self.mesh = vfm_mesh_geometry(self.vtk_mesh, device, dtype=dtype)
+        print(MeshQuality.report_quality_metrics(self.mesh))
 
-        
+        # Find boundary indices:
         try:
             # TODO: replace this with VTK Boundary finder
             self.boundaries = vtk_file_reader.read()['boundary']
@@ -22,250 +38,285 @@ class gaus_green_vfm_mesh():
         except:
             self.boundaries = None
             print('No Boundary Patches Found')
-
-        # Mesh readily available components
-        self.points = np.array(self.mesh.points)
-        self.n_cells = self.mesh.n_cells
-        self.cell_coords = self.mesh.cell_centers().points
-        self.dim = detect_dimension(self.cell_coords)
-        self.mesh = self.mesh.compute_cell_sizes()
-        self.cell_volume = self.mesh["Volume"]
-
-        self.device = torch.device('cpu')
-
-        # Custom face owner/neighbour indices and area/normals
-        self.fetch_faces()
-        self.cell2cell_face_intercepts()
-        self.cell2face_d_vec()
-        self.convert_to_tensor(dtype=torch.float32)
-
-        # Area Vectors for FVM Calculation
-        self.compute_face_area_vectors()
-    
-    def convert_to_tensor(self, dtype=torch.float32) -> None:
-        self.owner          = torch.tensor(self.owner)        
-        self.neighbour      = torch.tensor(self.neighbour)
-        self.face_areas     = torch.tensor(self.face_areas, dtype = dtype)
-        self.face_normals   = torch.tensor(self.face_normals, dtype = dtype)
-        self.cell_volumes   = torch.tensor(self.cell_volume, dtype = dtype)
-        self.interp_ws      = torch.tensor(self.interp_ws, dtype = dtype).reshape(1,1,-1,1)
-        self.d_vec          = torch.tensor(self.d_vec, dtype = dtype)
-
-    def to(self, device: torch.device) -> None:
-        self.device = device
-        self.owner = self.owner.to(device)    
-        self.neighbour = self.neighbour.to(device)
-        self.face_areas = self.face_areas.to(device)
-        self.face_normals = self.face_normals.to(device)
-        self.cell_volumes = self.cell_volumes.to(device)
-        self.interp_ws = self.interp_ws.to(device)
-        self.Sf = self.Sf.to(device)
-        self.d_vec = self.d_vec.to(device)
         
-    def fetch_faces(self) -> None:
-        self.faces_dict = {}
-        self.owner = []
-        self.neighbour = []
-        self.face_areas = []
-        self.face_normals = []
-        self.face_centres = []
+        # Try adding boundaries:
+        self.mesh._add_boundaries(self.boundaries)
+
+        # Default settings:
+        self.limiting_coefficient = 0.0
+        self.correction_method = 'Over-Relaxed'
+        self.implicit_orthogonality = True
+
+        # Prepare interpolation weights
+        self._calculate_correction_vectors(method = self.correction_method)
+        self._calculate_internal_interpolation_weights()
+
+    def _calculate_internal_interpolation_weights(self) -> torch.Tensor:
         
-        # For each cell, get faces, then for each face get points and calculate area/normals
-        for cell_id in range(self.n_cells):
-            vtk_cell = self.mesh.GetCell(cell_id)
-            n_faces = vtk_cell.GetNumberOfFaces()
+        self.internal_face_weights = torch.zeros(self.mesh.num_internal_faces, 
+                                                device=self.device,
+                                                dtype=self.dtype)
 
-            for face_id in range(n_faces):
-                face = vtk_cell.GetFace(face_id)
-                face_points = [face.GetPointId(i) for i in range(face.GetNumberOfPoints())]
-                face_key = tuple(sorted(face_points))
-
-                if face_key not in self.faces_dict:
-                    self.faces_dict[face_key] = len(self.owner)
-                    self.owner.append(cell_id)
-                    self.face_centres.append(self.points[face_points,:].mean(axis=0))
-                    self.neighbour.append(-1)
-                    self.face_areas.append(compute_face_area(face_points, self.points))
-                    self.face_normals.append(compute_face_normal(face_points, self.points))
-                else:
-                    idx = self.faces_dict[face_key]
-                    self.neighbour[idx] = cell_id
-
-        self.unique_faces = list(self.faces_dict.keys())
-
-        # get boundary index
-        self.boundary_faces_idx = np.where(np.array(self.neighbour) == -1)[0]
-        self.internal_faces_idx = np.where(np.array(self.neighbour) != -1)[0]
-
-        # convert to numpy
-        self.owner          = np.array(self.owner)
-        self.neighbour      = np.array(self.neighbour)
-        self.face_normals   = np.array(self.face_normals)[...,:self.dim]
-        self.face_areas     = np.array(self.face_areas)
-        self.cell_volume    = np.array(self.cell_volume)
-    
-    def cell2cell_face_intercepts(self) -> None:
-        
-        self.face_intersects    = np.zeros_like(self.face_normals)
-        self.interp_ws      = np.zeros_like(self.face_areas)
-
-        # Internal Faces cell2cell intersections
-        for face_key in self.internal_faces_idx:
-            p1, p2, p3 = [self.points[p_idx] for p_idx in self.unique_faces[face_key][:3]]
+        for i, face_key in enumerate(self.mesh.internal_faces):
+            p1, p2, p3, p4 = self.mesh.vertices[self.mesh.faces[face_key]]
             A, B, C, D = plane_equation_from_points(p1, p2, p3)
 
             # Line direction vector
-            
-            owner_cell_coord = self.cell_coords[self.owner[face_key]] 
-            neighbour_cell_coord = self.cell_coords[self.neighbour[face_key]]
-            line_dir = owner_cell_coord - neighbour_cell_coord
+            owner_cell_coord = self.mesh.cell_centers[self.mesh.face_owners[face_key]]
+            neighbour_cell_coord = self.mesh.cell_centers[self.mesh.face_neighbors[face_key]]
+            line_dir = self.mesh.cell_center_vectors[face_key]
 
             denominator = A * line_dir[0] + B * line_dir[1] + C * line_dir[2]
             t = -(A * owner_cell_coord[0] + B * owner_cell_coord[1] + C * owner_cell_coord[2] + D) / denominator
-            
+
             intersect_coord = owner_cell_coord + t * line_dir
-            interp_w = np.linalg.norm(intersect_coord - neighbour_cell_coord) / np.linalg.norm(owner_cell_coord - neighbour_cell_coord)
-            
-            self.face_intersects[face_key,:] = intersect_coord[:self.dim]
-            self.interp_ws[face_key] = interp_w
-            
-        print(f'Calculating Cell2Cell at Face Linear Interpolation Weights (L2):\n  min w:{np.min(self.interp_ws[self.internal_faces_idx]):.4f}, \
-              max w:{np.max(self.interp_ws[self.internal_faces_idx]):.4f}, \
-              mean w:{np.mean(self.interp_ws[self.internal_faces_idx]):.4f}')
+            self.internal_face_weights[i] = torch.norm(intersect_coord - neighbour_cell_coord, dim=-1, keepdim=False) / torch.norm(owner_cell_coord - neighbour_cell_coord, dim=-1, keepdim=False)
+
+        print(f'Calculating Cell2Cell at Face Linear Interpolation Weights (L2):\n  min w:{self.internal_face_weights.min():.4f}, \
+              max w:{self.internal_face_weights.max():.4f}, \
+              mean w:{self.internal_face_weights.mean():.4f}')
         
-        # TODO: calculate difference from intercept to face centre as %, display min, max, mean
-        print(f'Assessing Linear Intercept Skew From Face Centroid:\n TBD...')
+    def _calculate_correction_vectors(self, method=None) -> torch.Tensor:
+        assert method in ['Minimum','Orthogonal','Over-Relaxed', None], "Method must be one of 'Minimum', 'Orthogonal', or 'Over-Relaxed'."
 
-    def cell2face_d_vec(self) -> None:
-        displacement = (self.face_centres - self.cell_coords[self.owner])[...,:self.dim]
-        #print(displacement.shape, self.face_normals.shape)
-        #self.d_vec = np.abs(np.sum(displacement * self.face_normals, axis=1, keepdims=True) * self.face_normals)
-        self.d_vec = displacement
-        #np.linalg.norm(displacement, axis=1, keepdims=True)
-        #print(self.d_vec.shape)
-        #raise KeyboardInterrupt
-        #self.d_vec = np.abs(np.sum(displacement[...,:self.dim] * self.face_normals, axis=1))
-
-    def patch_face_keys_dict(self, exclusion_list:list=[]) -> None:
-        print('Collocating Boundary Patches to Cell Faces')
-
-        self.patch_face_keys = dict.fromkeys(self.boundaries.keys())
-
-        for patch in self.patch_face_keys:
-            patch_face_idx = self.find_bc_face_idx(patch)
-            
-            if patch_face_idx is None or patch in exclusion_list:
-                print(f'Excluding Z-axis patch {patch}')
-                exclusion_list.append(patch)
-            else:
-                self.patch_face_keys[patch] = np.array(patch_face_idx)
-
-        for patch in set(exclusion_list):
-            del self.patch_face_keys[patch]
+        # initialize vectors
+        self.d = torch.zeros(self.mesh.num_faces,
+                        self.mesh.dim, 
+                        device=self.device,
+                        dtype=self.dtype)
         
-    
-    def find_bc_face_idx(self, patch) -> tuple:
-        assert len(self.boundary_faces_idx) > 0
+        # fill in boundary faces with distance between cell center and face center
+        self.d[self.mesh.internal_faces] = self.mesh.cell_center_vectors[self.mesh.internal_faces]
+        self.d[self.mesh.boundary_faces] = self.mesh.face_centers[self.mesh.boundary_faces] - self.mesh.cell_centers[self.mesh.face_owners[self.mesh.boundary_faces]]
+        self.d_mag = torch.norm(self.d, dim=-1, keepdim=False)
 
-        patch_points = np.array(self.boundaries[patch].points)
-        if self.dim == 2 and np.all(patch_points[:, -1] == patch_points[0, -1], axis=0):
-            return None
-            
-        patch_point_indices = find_indices_dict(patch_points, self.points)
-        
-        patch_face_keys= []
-        for face_key in self.boundary_faces_idx:
-            if np.all(np.isin([x for x in self.unique_faces[face_key]], patch_point_indices)):
-                patch_face_keys.append(face_key)
-        
-        if patch_face_keys == []:
-            raise KeyError(f'Patch {patch} was not found in the face list')
+        if method == 'Minimum':
+            # Minimum distance correction
+            self.delta = self.mesh.face_normal_unit_vectors*(torch.einsum('fd,fd->f',self.mesh.face_normal_unit_vectors, self.d)/self.d_mag).unsqueeze(-1)
+        elif method == 'Orthogonal':
+            self.delta = self.d/self.d_mag.unsqueeze(-1)
+        elif method == 'Over-Relaxed':
+            self.delta = self.d * (1/torch.max(torch.einsum('fd,fd->f',self.mesh.face_normal_unit_vectors,self.d),0.5*self.d_mag)).unsqueeze(-1)
         else:
-            print(f' Found Patch "{patch}" with {len(patch_face_keys)} Faces')
-
-        return patch_face_keys
-    
-    def compute_face_area_vectors(self) -> None:
-        self.Sf = (self.face_areas.reshape(1,-1,1) * self.face_normals) # (n_faces, 3)
-
-    def compute_unweighted_gradient(self, field_values:torch.tensor) -> torch.tensor:
-
-        assert len(field_values.shape) == 4
-        assert field_values.shape[-2] == self.n_cells
-
-        batch_size = field_values.shape[0]
-        channels = field_values.shape[-1]
-        space_dim = self.Sf.shape[-1]
-        time_dim = field_values.shape[1]
+            self.delta = self.mesh.face_normal_unit_vectors
         
-        # Init Gradient Field:
-        grad_field = torch.zeros((batch_size, time_dim, self.n_cells, channels, space_dim), 
-                                 dtype=field_values.dtype, device=self.device)
-        
-        # Internal cells only:
-        idx = self.internal_faces_idx
+        self.delta_mag = torch.norm(self.delta, dim=-1, keepdim=False)
 
-        # Compute Flux
-        phi_o = field_values[...,self.owner[idx],:]
-        phi_n = field_values[...,self.neighbour[idx],:]
-        dphi = phi_o*self.interp_ws[...,idx,:] + phi_n*(1-self.interp_ws[...,idx,:])
-
-        flux = torch.einsum('itjk,ijl->itjkl', dphi, self.Sf[:,idx,:])
-
-        grad_field.index_add_(2, self.owner[idx], flux)
-        grad_field.index_add_(2, self.neighbour[idx], -flux)
-
-        return grad_field
+        # Calculate k_vector
+        self.k_vector = self.mesh.face_normal_unit_vectors - self.delta
+        self.k_vector_mag = torch.norm(self.k_vector, dim=-1, keepdim=False)
     
-    def apply_volume_correction(self, grad_field: torch.tensor) -> torch.tensor:
-        return grad_field / self.cell_volumes.reshape(1,1,-1,1,1)
-
     def add_bc_conditions(self, dict):
-        # TODO: this needs to be replaced by something more automated or in init file
+        # TODO: this can to be replaced by something more automated or in init file
         for key1 in dict: # U or P
             for key2 in dict[key1]: # patch
                 if 'value' in dict[key1][key2].keys():
                     if isinstance(dict[key1][key2]['value'], list):
-                        dict[key1][key2]['value'] = dict[key1][key2]['value'][:self.dim]
+                        dict[key1][key2]['value'] = dict[key1][key2]['value'][:self.mesh.dim]
         self.bc_conditions = dict
 
-    def add_BC_to_flux(self, grad_field: torch.tensor, field_type: str, field_values: torch.tensor=None, order=1, original_field:torch.tensor=None) -> torch.tensor:
-        assert field_type is not None
+    def apply_bc_conditions(self, patch_name, bc_face_idx, field, field_type:str='U',grad_field_f:bool=False, original_field:torch.Tensor=None) -> torch.Tensor:
+        raise NotImplementedError
+        patch_type = self.bc_conditions[field_type][patch_name]['type']
+        bc_cell_idx = self.mesh.face_owners[bc_face_idx]
+        batch_size = field.shape[0]
+        time_size = field.shape[1]
+        
+        if patch_type == 'empty':
+            return None
+        elif patch_type == 'fixedValue':
+            field_value = torch.tensor(self.bc_conditions[field_type][patch_name]['value'], dtype=self.dtype, device=self.device)
+            if grad_field_f:
+                assert original_field is not None
+                delta_phi = original_field[...,bc_cell_idx,:] - field_value.reshape(1, 1, 1, -1).repeat(batch_size, time_size, len(bc_face_idx), 1)
+                # repeated U so that it is U,U,U,V... etc and repeated delta so that it is dx,dy,dz,dx... etc.
+                #face_grad = torch.einsum('btfd,fd->btfd', delta_phi.repeat_interleave(self.mesh.dim, dim=-1), (self.d/self.d_mag.unsqueeze(-1))[bc_face_idx,:])
+                face_grad = torch.einsum('btfd,fe->btfed', delta_phi, (self.d/self.d_mag.unsqueeze(-1))[bc_face_idx,:]).flatten(start_dim=-2)
+                
+                return face_grad
+            else:
+                return field_value.reshape(1, 1, 1, -1).repeat(batch_size, time_size, len(bc_face_idx), 1)
+        elif patch_type == 'zeroGradient':
+            if grad_field_f:
+                return None
+            else:
+                return field[...,bc_cell_idx,:]
+        elif patch_type == 'noSlip':
+            if grad_field_f:
+                assert original_field is not None
+                delta_phi = original_field[...,bc_cell_idx,:]
+                face_grad = torch.einsum('btfd,fe->btfed', delta_phi, (self.d/self.d_mag.unsqueeze(-1))[bc_face_idx,:])
+                face_grad_normal = torch.einsum('btfed,fd->btfe', face_grad, self.mesh.face_normal_unit_vectors[bc_face_idx,:])*self.mesh.face_normal_unit_vectors[bc_face_idx,:]
+                return face_grad_normal.flatten(start_dim=-2)
+            else:
+                return None
+        elif patch_type == 'symmetryPlane':
+            if grad_field_f:
+                return None
+            else:
+                return field[...,bc_cell_idx,:] - 2*(torch.einsum('btfc,fc->btf', field[...,bc_cell_idx,:], self.mesh.face_normal_unit_vectors[bc_face_idx,:])).unsqueeze(-1) * self.mesh.face_normal_unit_vectors[bc_face_idx,:].unsqueeze(0)
 
-        for patch in self.patch_face_keys:
-            face_keys_idx = self.patch_face_keys[patch]
+    def interpolate_to_faces(self, field: torch.Tensor, field_type:str='U', grad_field_f=False, original_field=None) -> torch.Tensor:
+        raise NotImplementedError
+        # Get field shape
+        assert len(field.shape) == 4
+        field_shape = field.shape
+        batch_size = field_shape[0]
+        time_size = field_shape[1]
+        channel_size = field_shape[-1]
+        
+        # Initialize face values
+        face_values = torch.zeros((batch_size, time_size, self.mesh.num_faces, channel_size), device=field.device)
+        
+        # Interpolate for internal faces
+        idx = self.mesh.internal_faces
+        face_values[:,:,idx,:] = field[:,:,self.mesh.face_owners[idx],...]*(self.internal_face_weights).reshape(1,1,-1,1)  + \
+                                 field[:,:,self.mesh.face_neighbors[idx],...]*(1-self.internal_face_weights).reshape(1,1,-1,1)
+        
+        # Apply hard boundary conditions for faces
+        if self.boundaries is not None:
+            for patch_name, patch_faces in self.mesh.patch_face_keys.items():
+                face_value = self.apply_bc_conditions(patch_name, 
+                                                      bc_face_idx=patch_faces, 
+                                                      field=field, 
+                                                      field_type=field_type, 
+                                                      grad_field_f=grad_field_f, 
+                                                      original_field=original_field)
+                if face_value is not None:
+                    face_values[:,:,patch_faces,:] = face_value
+        
+        return face_values
     
-            bc_values_at_face = get_boundary_flux(grad_field = grad_field, 
-                                                  field_values = field_values,
-                                                  original_field=original_field,
-                                                  bc_patch = self.bc_conditions[field_type][patch],
-                                                  owner = self.owner[face_keys_idx],
-                                                  order = order,
-                                                  delta_d_vector  = self.d_vec[face_keys_idx],
-                                                  face_normals_patch = self.face_normals[face_keys_idx])
+    def calculate_gradients(self, field: torch.Tensor, field_type:str, face_values:torch.Tensor=None) -> torch.Tensor:
+        raise NotImplementedError
+        # Get field shape
+        field_shape = field.shape
+        batch_size = field_shape[0]
+        time_size = field_shape[1]
+        channel_size = field_shape[-1]
+
+        # Interpolate field to face centers
+        if face_values is None:
+            face_values = self.interpolate_to_faces(field, field_type)
+        
+        # Calculate gradients using Gauss-Green theorem
+        face_flux = torch.einsum('btfd,fe->btfed', face_values, self.mesh.face_areas)
+        
+        # Add to owner/neighbour cells
+        idx = self.mesh.internal_faces
+        gradients = torch.zeros((batch_size, time_size, self.mesh.n_cells, channel_size, self.mesh.dim), device=field.device)
+        gradients.index_add_(2, self.mesh.face_owners, face_flux)
+        gradients.index_add_(2, self.mesh.face_neighbors[idx], -face_flux[:,:,idx,:,:])
+        gradients = gradients / self.mesh.cell_volumes.reshape(1,1,-1,1,1)
+        return gradients.flatten(start_dim=-2)
+    
+    def calculate_divergence(self, field: torch.Tensor, field_type:str, grad_field=False) -> torch.Tensor:
+        raise NotImplementedError
+        # Get field shape
+        field_shape = field.shape
+        batch_size = field_shape[0]
+        time_size = field_shape[1]
+        channel_size = field_shape[-1]
+        
+        div_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, self.mesh.dim), dtype=field.dtype, device=self.device)
+        
+        face_values = self.interpolate_to_faces(field, field_type, grad_field)
+        face_flux_mag = torch.einsum('btfd,fd->btf', face_values, self.mesh.face_areas)
+        divergence  = face_flux_mag.unsqueeze(-1) * face_values
+
+        idx = self.mesh.internal_faces
+        div_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, self.mesh.dim), dtype=field.dtype, device=self.device)
+        div_field.index_add_(2, self.mesh.face_owners, divergence)
+        div_field.index_add_(2, self.mesh.face_neighbors[idx], -divergence[...,idx,:])
+        div_field /= self.mesh.cell_volumes.reshape(1,1,-1,1)
+        return div_field
+
+    def calculate_laplacian(self, field: torch.Tensor, field_type:str, face_values:torch.Tensor=None) -> torch.Tensor:
+        raise NotImplementedError
+        # Get field shape
+        field_shape = field.shape
+        batch_size = field_shape[0]
+        time_size = field_shape[1]
+        channel_size = field_shape[-1]
+
+        # initialize laplacian field
+        lap_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, self.mesh.dim), dtype=field.dtype, device=self.device)
+
+        # Interpolate field to face centers
+        if face_values is None:
+            face_values = self.interpolate_to_faces(field, field_type)
+        
+        # Calculate Implicit Face Gradients using First Order Appoximation
+        implicit_face_gradients = torch.zeros((batch_size, time_size, self.mesh.num_faces, channel_size), dtype=field.dtype, device=field.device)
+        implicit_face_gradients[:,:,self.mesh.internal_faces,:] = field[:,:,self.mesh.face_neighbors[self.mesh.internal_faces], :] - field[:,:,self.mesh.face_owners[self.mesh.internal_faces],:]
+        implicit_face_gradients[:,:,self.mesh.boundary_faces,:] = face_values[:,:,self.mesh.boundary_faces, :] - field[:,:,self.mesh.face_owners[self.mesh.boundary_faces],:]
+        implicit_face_gradients /= self.d_mag.reshape(1, 1, -1, 1)
+
+        # Calculate Explicit Face Gradients using Gauss-Green theorem
+        gradients = self.calculate_gradients(field, field_type, face_values=face_values)
+        explicit_face_gradients = self.interpolate_to_faces(gradients, field_type, grad_field_f=True, original_field=field)
+        explicit_face_gradients = explicit_face_gradients.unflatten(dim=-1, sizes=(self.mesh.dim, self.mesh.dim))
             
-            if bc_values_at_face is not None:
-                # bc_values_at_face[...,:self.dim] may break if we do preassure as dim=1
-                bc_flux = torch.einsum('itjk,ijl->itjkl', bc_values_at_face, self.Sf[...,face_keys_idx,:])
-                grad_field.index_add_(2, self.owner[face_keys_idx], bc_flux)
-        
-        return grad_field
-    
-    def compute_derivative(self, field: torch.tensor, field_type:str=None, order:int=1, original_field:torch.tensor=None) -> torch.tensor:
-        
-        # reshape into time dim for function universality
-        if len(field.shape) == 3:
-            field = field.unsqueeze(1)    # (Batch, Time, Nodes, Channel)
-        
-        grad_field = self.compute_unweighted_gradient(field)
-        
-        if self.boundaries:
-            assert field_type is not None
-            grad_field = self.add_BC_to_flux(grad_field, field_type, field, order=order, original_field=original_field)
-        
-        grad_field = self.apply_volume_correction(grad_field)
 
-        if field.shape[1] == 1:
-            grad_field = grad_field.permute(0,1,2,4,3).squeeze(1)
-        
-        return grad_field.flatten(start_dim=-2)
+        if self.implicit_orthogonality:
+            # Implicit has an approximation for grad(U) dot Delta
+            #orth_diffusion = torch.einsum('btfd,fd->btfd', implicit_face_gradients, self.delta_mag) * self.mesh.face_areas_mag.reshape(1, 1, -1, 1)
+            orth_diffusion = implicit_face_gradients * (self.delta_mag * self.mesh.face_areas_mag).reshape(1, 1, -1, 1)
+        else:
+            # Explicit executes the dot_product exactly
+            orth_diffusion = torch.einsum('btfde,fe->btfd', explicit_face_gradients, self.delta) * self.mesh.face_areas_mag.reshape(1, 1, -1, 1)
+            
+        if self.correction_method is not None:
+            non_orth_diffusion = torch.einsum('btfde,fe->btfd', explicit_face_gradients, self.k_vector) * self.mesh.face_areas_mag.reshape(1, 1, -1, 1)
+        else:
+            non_orth_diffusion = 0
+
+        face_diffusion = orth_diffusion + non_orth_diffusion
+
+        # Add to owner/neighbour cells
+        idx = self.mesh.internal_faces
+        lap_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, self.mesh.dim), dtype=field.dtype, device=self.device)
+        lap_field.index_add_(2, self.mesh.face_owners, face_diffusion)
+        lap_field.index_add_(2, self.mesh.face_neighbors[idx], -face_diffusion[...,idx,:])
+        lap_field /= self.mesh.cell_volumes.reshape(1,1,-1,1)
+        return lap_field
+            
+
+
+if __name__ == '__main__':
+    print('hello world')
+
+    dir = r'C:\Users\Noahc\Downloads\c5_test\case.foam'
+    vtk_file_reader = pv.POpenFOAMReader(dir)
+    mesh = gaus_green_vfm_mesh(vtk_file_reader, device='cpu')
+
+    mesh.add_bc_conditions(get_bc_dict())
+
+
+
+    # Sample Solution
+    vtk_file_reader.set_active_time_value(vtk_file_reader.time_values[-1])
+    vtk_file_reader.cell_to_point_creation = False
+    vtk_file_reader.enable_all_patch_arrays()
+    vtk_mesh = vtk_file_reader.read()[0]
+
+    U_gt = torch.tensor(vtk_mesh['U'], dtype = torch.float32)
+    gradU_gt = torch.tensor(vtk_mesh['grad(U)'], dtype = torch.float32)
+    lapU_gt = torch.tensor(vtk_mesh['lapU'], dtype = torch.float32)
+    divU_gt = torch.tensor(vtk_mesh['divU'], dtype = torch.float32)
+
+    # Get values
+    gradU = mesh.calculate_gradients(U_gt.unsqueeze(0).unsqueeze(0), field_type='U')
+    print(f'Any NA in gradU: {torch.any(torch.isnan(gradU))}')
+
+    divU = mesh.calculate_divergence(U_gt.unsqueeze(0).unsqueeze(0), field_type='U')
+    print(f'Any NA in divU: {torch.any(torch.isnan(divU))}')
+
+    for i in ['Minimum', 'Orthogonal', 'Over-Relaxed', None]:
+        for j in [True, False]:
+            mesh.limiting_coefficient = 0.0
+            mesh.correction_method = i
+            mesh.implicit_orthogonality = j
+            lapU = mesh.calculate_laplacian(U_gt.unsqueeze(0).unsqueeze(0), field_type='U')
+            print(f'mesh.correction_method{mesh.correction_method}, mesh.implicit_orthogonality {mesh.implicit_orthogonality} success',
+                  f' Any NA in gradU: {torch.any(torch.isnan(lapU))}')

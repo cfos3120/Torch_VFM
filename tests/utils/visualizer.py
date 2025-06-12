@@ -19,7 +19,12 @@ def scalar_bar(plotter, actor):
         shadow=True
     )
 
-def plot_comparison(mesh, file_location, file_name, ground_truth, prediction, i, j=None, interactive = True, clims = None, clims2 = None, clims3 = None, show_mesh =False):
+def plot_comparison(mesh, file_location, file_name, 
+                    ground_truth, prediction, i,
+                    point_label=None, j=None, interactive = True, 
+                    clims = None, clims2 = None, clims3 = None, 
+                    show_mesh =False, percent=False,
+                    zoom=False):
     if j is None:
         j = i 
 
@@ -30,7 +35,10 @@ def plot_comparison(mesh, file_location, file_name, ground_truth, prediction, i,
     mesh_for_plotting = mesh.copy(deep=True)
     mesh_for_plotting['Torch FVM'] = prediction[:,i]
     mesh_for_plotting['Ground Truth'] = ground_truth[:,j]
-    mesh_for_plotting['Difference'] = ground_truth[:,j] - prediction[:,i]
+    if percent:
+        mesh_for_plotting['Difference'] = (ground_truth[:,j] - prediction[:,i])/(ground_truth[:,j] + 1e-12)
+    else:
+        mesh_for_plotting['Difference'] = ground_truth[:,j] - prediction[:,i]
 
     # comparison colour map:
     berlin_cmap = plt.get_cmap("bwr")
@@ -94,7 +102,22 @@ def plot_comparison(mesh, file_location, file_name, ground_truth, prediction, i,
     # Custom scalar bar
     scalar_bar(plotter, "Difference")
     
-
+    if point_label:
+        plotter.add_point_labels(
+        [point_label],           # list of points (even if it's one)
+        ["Top of Sphere"], # corresponding labels
+        point_size=10,
+        font_size=12,
+        text_color="red"
+    )
+    
+    if zoom:
+        plotter.camera.zoom(1.4)
+        camera_pos = [  (0.044014283620703254, -0.02407829133705193, 11.125520284676016),  # Camera position (X, Y, Z)
+                        (0.0, 0.0, 0.0),  # Focal point (center of the mesh)
+                        (0.0, 1.0, 0.0)]  # View-up direction (Z-up)
+            
+        plotter.camera_position = camera_pos
 
     # Display the plot
     if interactive:

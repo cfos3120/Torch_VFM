@@ -25,14 +25,18 @@ def get_bc_dict(file=None):
             'out':{ "type":'zeroGradient', },  
             'cylinder':{ "type":'fixedValue', "value":[0,0,0] },
             'sym1':{ "type":'symmetryPlane' },
-            'sym2':{ "type":'symmetryPlane' }   
+            'sym2':{ "type":'symmetryPlane' },
+            'front':{ "type":'empty' },
+            'back':{ "type":'empty' }        
             }
         p_bc_dict = {
             'in':{ "type":'zeroGradient' },
             'out':{ "type":'fixedValue', "value":0 },  
             'cylinder':{ "type":'zeroGradient' } ,
             'sym1':{ "type":'symmetryPlane' },
-            'sym2':{ "type":'symmetryPlane' } 
+            'sym2':{ "type":'symmetryPlane' },
+            'front':{ "type":'empty' },
+            'back':{ "type":'empty' }     
             }
         return {'U':U_bc_dict, 'p':p_bc_dict}
     else:
