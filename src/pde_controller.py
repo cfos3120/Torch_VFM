@@ -90,8 +90,10 @@ class pde_controller():
         
         return gradient_dict
 
-    def get_temporal_gradients(self, out, time_step, input_solution=None, channel:str='U', scheme:str='steady'):
+    def get_temporal_gradients(self, out, time_step, input_solution=None, channel:str='U', scheme:str=None):
         
+        if scheme is None:
+            scheme = self.dt_scheme
         if time_step is None and self.time_step is not None:
             time_step = self.time_step
         elif time_step is None:
