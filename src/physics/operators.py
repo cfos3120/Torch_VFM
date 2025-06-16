@@ -1,6 +1,58 @@
 import torch
 
 '''
+Time Derivative
+Takes in a range of prior solutions and calculates the change in solution over time.
+Available methods are steady-state(returns zero), Euler (first order) and Backward (second order)
+'''
+class Temporal_Differentiator():
+
+    @staticmethod
+    def caclulate(solution:torch.Tensor, time_step, input_solution:torch.Tensor=None, method='backwards'):
+        assert len(solution.shape) == 4
+        output_solution_shape = solution.shape
+        if input_solution is not None:
+            assert len(input_solution.shape) == 4
+            solution = torch.cat([input_solution,solution], dim=1)
+            input_time_steps = input_solution.shape[1]
+        else:
+            input_time_steps = 0
+        assert solution.shape[1] > 1, 'Must include more than one time-step'
+
+        if method == 'steady':
+            return 0
+        elif method == 'backwards':
+            dt_out =  Temporal_Differentiator.backward_method(solution, time_step, starting_idx=input_time_steps)
+        elif method == 'euler':
+            dt_out =  Temporal_Differentiator.euler_method(solution, time_step, starting_idx=input_time_steps)
+        else:
+            raise NotImplementedError(f'Time Derivation Method "{method}" not supported, please select "steady","euler" or "backwards"')
+
+        assert dt_out.shape == output_solution_shape, 'May need to fix something here if an assertion error is thrown'
+        
+        # pad to 3D from 2D if not a scalar
+        if solution.shape[-1] == 2:
+            dt_out = torch.nn.functional.pad(dt_out,(0,1))
+        return dt_out
+
+    @staticmethod
+    def euler_method(solution:torch.Tensor, time_step, starting_idx=0):
+        if starting_idx != 0:
+            starting_idx -= 1
+        dt_out = (solution[:,starting_idx+1:,...] - solution[:,starting_idx:-1,...])/time_step
+        return dt_out
+        
+    @staticmethod
+    def backward_method(solution:torch.Tensor, time_step, starting_idx=0):
+        if starting_idx != 0:
+            starting_idx -= 2
+        if starting_idx == -1:
+            starting_idx +=1
+            solution = torch.cat([solution[:,[0],...],solution], dim=1)
+        dt_out = ((3/2)*solution[:,starting_idx+2:,...] - 2*solution[:,starting_idx+1:-1,...] + (1/2)*solution[:,starting_idx:-2,...])/time_step
+        return dt_out
+
+'''
 Face Interpolater
 Linear interpolates the values from cell centres to face centres
 using specified weights according to distance to the face. 
@@ -37,7 +89,7 @@ class Divergence_Operator():
         channel_size = field.shape[-1]
 
         div_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, self.mesh.dim), dtype=field.dtype, device=self.device)
-        grad_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, channel_size, self.mesh.dim), dtype=field.dtype, device=self.device)
+        grad_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, self.mesh.dim, channel_size), dtype=field.dtype, device=self.device)
         
         div_field, grad_field = Divergence_Operator.internal_flux(self, div_field, grad_field, field)
         div_field, grad_field = Divergence_Operator.boundary_flux(self, div_field, grad_field, field, field_type)
@@ -50,7 +102,6 @@ class Divergence_Operator():
         idx = self.mesh.internal_faces
         divergence = torch.einsum('btfd,fd->btf', face_values, self.mesh.face_areas[idx]).unsqueeze(-1) * face_values
         gradient = torch.einsum('btfd,fe->btfed', face_values, self.mesh.face_areas[idx])
-        
         div_field.index_add_(2, self.mesh.face_owners[idx], divergence)
         div_field.index_add_(2, self.mesh.face_neighbors[idx], -divergence)
         grad_field.index_add_(2, self.mesh.face_owners[idx], gradient)
@@ -61,6 +112,7 @@ class Divergence_Operator():
     def boundary_flux(self, div_field:torch.tensor, grad_field:torch.tensor, field:torch.tensor, field_type:str='U') -> torch.Tensor:
         batch_size = field.shape[0]
         time_size = field.shape[1]
+        channel_size = field.shape[-1]
 
         for patch_name, patch_faces in self.mesh.patch_face_keys.items():
             patch_type = self.bc_conditions[field_type][patch_name]['type']
@@ -82,6 +134,10 @@ class Divergence_Operator():
             
             divergence = torch.einsum('btfd,fd->btf', face_values, self.mesh.face_areas[patch_faces]).unsqueeze(-1) * face_values
             gradient = torch.einsum('btfd,fe->btfed', face_values, self.mesh.face_areas[patch_faces])
+            
+            if patch_type == 'symmetryPlane' and channel_size ==1:  # i.e. Scalar
+                gradient = torch.zeros(batch_size, time_size, len(patch_faces), 1, dtype=self.dtype)
+
             div_field.index_add_(2, self.mesh.face_owners[patch_faces], divergence)
             grad_field.index_add_(2, self.mesh.face_owners[patch_faces], gradient)
     
