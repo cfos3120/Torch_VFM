@@ -84,11 +84,14 @@ class Divergence_Operator():
     
     @staticmethod
     def caclulate(self, field: torch.Tensor, field_type:str = 'U') -> torch.Tensor:
+        
+        if len(field.shape) == 3 and field_type == 'p':
+            field.unsqueeze(-1)
         batch_size = field.shape[0]
         time_size = field.shape[1]
         channel_size = field.shape[-1]
 
-        div_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, self.mesh.dim), dtype=field.dtype, device=self.device)
+        div_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, channel_size), dtype=field.dtype, device=self.device)
         grad_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, self.mesh.dim, channel_size), dtype=field.dtype, device=self.device)
         
         div_field, grad_field = Divergence_Operator.internal_flux(self, div_field, grad_field, field)
@@ -136,7 +139,8 @@ class Divergence_Operator():
             gradient = torch.einsum('btfd,fe->btfed', face_values, self.mesh.face_areas[patch_faces])
             
             if patch_type == 'symmetryPlane' and channel_size ==1:  # i.e. Scalar
-                gradient = torch.zeros(batch_size, time_size, len(patch_faces), 1, dtype=self.dtype)
+                gradient = torch.zeros(batch_size, time_size, len(patch_faces), self.mesh.dim, 1, dtype=self.dtype, device=grad_field.device)
+                divergence = torch.zeros(batch_size, time_size, len(patch_faces), 1, dtype=self.dtype, device=div_field.device)
 
             div_field.index_add_(2, self.mesh.face_owners[patch_faces], divergence)
             grad_field.index_add_(2, self.mesh.face_owners[patch_faces], gradient)
@@ -155,7 +159,7 @@ class Laplacian_Operator():
         
         # initialize laplacian field
         batch_size = field.shape[0]
-        time_size = field.shape[0]
+        time_size = field.shape[1]
 
         lap_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, self.mesh.dim), dtype=field.dtype, device=self.device)
 

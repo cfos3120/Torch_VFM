@@ -17,7 +17,7 @@ class vfm_mesh_geometry():
         self._face_connectivity()
         self._calculate_face_centers_and_areas()
         self._connectivity_vectors()
-        self._correct_vector_direction()
+        #self._correct_vector_direction()
         self._compute_skewness_and_orthogonality()
 
     def _fetch_vtk_faces(self, mesh) -> None:
@@ -225,7 +225,7 @@ class vfm_mesh_geometry():
         for patch in self.patch_face_keys:
 
             # Find the indices of the faces that belong to this patch
-            patch_point_indices = find_indices_dict(boundaries[patch].points, self.vertices.numpy())
+            patch_point_indices = find_indices_dict(boundaries[patch].points, self.vertices.cpu().numpy())
             
             patch_face_idx= []
             for face_key in self.boundary_faces:
