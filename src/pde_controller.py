@@ -4,6 +4,7 @@ from .utils.data_utils import get_vtk_file_reader, get_bc_dict
 #from .physics.navier_stokes_basic import navier_stokes_2d
 from .physics.utils import gradient_str
 from .physics.navier_stokes_fvm import *
+from .physics.navier_stokes_fdm import *
 
 class pde_controller():
     def __init__(self, config: dict, device) -> None:
@@ -11,14 +12,16 @@ class pde_controller():
         self.config = config
         file_name = config['mesh_file_pointer']
         self.vtk_file_reader = get_vtk_file_reader(file_name)
-        self.mesh = gaus_green_vfm_mesh(self.vtk_file_reader, L=config['length_scale'], device=device)
         self.device = device
         self.dim = 2
+        self.mesh = gaus_green_vfm_mesh(self.vtk_file_reader, L=config['length_scale'], device=device)
+        
+        self.input_f_indices = config['branch_key_index']
 
         # prepare mesh
-        self.mesh.add_bc_conditions(get_bc_dict())
+        self.mesh.add_bc_conditions(get_bc_dict(type=config['bc_dict_type']))
 
-        self.pde_equations = navier_stokes_3d # <- we can make this a map for other pdes
+        self.pde_equations          = navier_stokes_3d # <- we can make this a map for other pdes
         self.verbose                = config['settings']['verbose']
         self.pin_first_ts           = config['settings']['pin_first_ts']
         self.ic_loss                = config['settings']['ic_loss']
@@ -63,20 +66,23 @@ class pde_controller():
     def compute(self, 
                 out: torch.tensor, 
                 y: torch.tensor = None, 
+                input_functions:tuple=None,
                 input_solution: torch.tensor = None, 
                 time_step=None, 
                 Re:torch.tensor=None) -> torch.tensor:
-        '''
-        If y is given, we assume that the time derivative for the first output time-step, should be 
-        calculated using the last (or second last if we are using initial condition matching). Additional
-        conditions to be set in __init__ are:
-            1. Non-time dependent solutions
-            2. Continuity only (for cases where dt is too large)
-            3. Soblev Norms (need y for this) compare gradients as well and add to balancer
+        
+        if input_functions is not None:
+            if 'input_solution' in self.input_f_indices.keys():
+                input_solution = input_functions[self.input_f_indices['input_solution']]
+            if 'Re' in self.input_f_indices.keys():
+                Re = input_functions[self.input_f_indices['Re']]
 
-        NOTE: With FVM, we no longer need to add boundary coordinates to the field, as these are handled
-        internally.
-        '''
+        # Introduce time-dimension for tensor compatability
+        out = out.unsqueeze(1) if len(out.shape) == 3 else out
+        y = y.unsqueeze(1) if len(y.shape) == 3 else y
+        if input_solution is not None:
+            input_solution = input_solution.unsqueeze(1) if len(input_solution.shape) == 3 else input_solution
+        
         if time_step is None:
             time_step = self.time_step
         
@@ -119,12 +125,17 @@ class pde_controller():
         self.loss_dict['IC Loss'] = ic_loss
         return ic_loss
 
-    def compute_pde_loss(self, 
-                         out:torch.tensor, 
+    def compute_pde_field(self, 
+                         out:torch.tensor,
                          input_solution:torch.tensor=None, 
                          time_step=None, 
                          Re:torch.tensor=None):
         
+        
+        
+        if len(out.shape) == 3 and self.dt_scheme == 'steady':
+            out = out.unsqueeze(1) # add time dim
+
         if input_solution is not None:
             if self.pin_first_ts is False or input_solution.shape[1] == 1:
                 input_solution = input_solution[...,self.field_channel_idx_dict['U']]
@@ -139,10 +150,18 @@ class pde_controller():
         eqn_dict = navier_stokes_3d(self.mesh, 
                                     solution_field=out, 
                                     solution_index=self.field_channel_idx_dict, 
-                                    Re=Re.unsqueeze(0), 
+                                    Re=Re.unsqueeze(1), 
                                     time_derivative=dt_field)
-       
+        
+        return eqn_dict
 
+    def compute_pde_loss(self, 
+                         out:torch.tensor, 
+                         input_solution:torch.tensor=None, 
+                         time_step=None, 
+                         Re:torch.tensor=None):
+        
+        eqn_dict = self.compute_pde_field(out,input_solution,time_step,Re)
         eqn_loss_dict = dict.fromkeys(eqn_dict.keys())
         for key in eqn_loss_dict:
             eqn_loss_dict[key] = self.loss_fn(eqn_dict[key], torch.zeros_like(eqn_dict[key]))
