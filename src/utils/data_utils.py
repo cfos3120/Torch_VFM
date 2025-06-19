@@ -16,29 +16,44 @@ def vtk_boundary_finder():
     # internal field patches
     # additionally, we want to be able to parse a flag map from a vtp file (instead)
 
-def get_bc_dict(file=None):
+def get_bc_dict(file=None, type=None):
 
     if file == None:
-        print('resorting to default bc_dict, this line needs to be superseeded')
-        U_bc_dict = {
-            'in':{ "type":'fixedValue', "value":[1,0,0] },
-            'out':{ "type":'zeroGradient', },  
-            'cylinder':{ "type":'fixedValue', "value":[0,0,0] },
-            'sym1':{ "type":'symmetryPlane' },
-            'sym2':{ "type":'symmetryPlane' },
-            'front':{ "type":'empty' },
-            'back':{ "type":'empty' }        
-            }
-        p_bc_dict = {
-            'in':{ "type":'zeroGradient' },
-            'out':{ "type":'fixedValue', "value":0 },  
-            'cylinder':{ "type":'zeroGradient' } ,
-            'sym1':{ "type":'symmetryPlane' },
-            'sym2':{ "type":'symmetryPlane' },
-            'front':{ "type":'empty' },
-            'back':{ "type":'empty' }     
-            }
-        return {'U':U_bc_dict, 'p':p_bc_dict}
+        assert type is not None
+        if type == 'cylinder':
+            print('resorting to default cylinder flow bc_dict, this line needs to be superseeded')
+            U_bc_dict = {
+                'in':{ "type":'fixedValue', "value":[1,0,0] },
+                'out':{ "type":'zeroGradient', },  
+                'cylinder':{ "type":'fixedValue', "value":[0,0,0] },
+                'sym1':{ "type":'symmetryPlane' },
+                'sym2':{ "type":'symmetryPlane' },
+                'front':{ "type":'empty' },
+                'back':{ "type":'empty' }        
+                }
+            p_bc_dict = {
+                'in':{ "type":'zeroGradient' },
+                'out':{ "type":'fixedValue', "value":0 },  
+                'cylinder':{ "type":'zeroGradient' } ,
+                'sym1':{ "type":'symmetryPlane' },
+                'sym2':{ "type":'symmetryPlane' },
+                'front':{ "type":'empty' },
+                'back':{ "type":'empty' }     
+                }
+            return {'U':U_bc_dict, 'p':p_bc_dict}
+        elif type == 'cavity':
+            print('resorting to default cavity flow bc_dict, this line needs to be superseeded')
+            U_bc_dict = {
+                'movingWall':{ "type":'fixedValue', "value":[1,0,0] },
+                'fixedWalls':{ "type":'noSlip'},  
+                'frontAndBack':{ "type":'empty'}, 
+                }
+            p_bc_dict = {
+                'movingWall':{ "type":'zeroGradient' },
+                'fixedWalls':{ "type":'zeroGradient'},  
+                'frontAndBack':{ "type":'empty' } ,
+                }
+            return {'U':U_bc_dict, 'p':p_bc_dict}
     else:
         raise NotImplementedError
 

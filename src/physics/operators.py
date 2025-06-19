@@ -17,7 +17,9 @@ class Temporal_Differentiator():
             input_time_steps = input_solution.shape[1]
         else:
             input_time_steps = 0
-        assert solution.shape[1] > 1, 'Must include more than one time-step'
+        
+        if method != 'steady':
+            assert solution.shape[1] > 1, 'Must include more than one time-step'
 
         if method == 'steady':
             return 0
