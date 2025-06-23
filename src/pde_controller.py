@@ -14,12 +14,13 @@ class pde_controller():
         self.vtk_file_reader = get_vtk_file_reader(file_name)
         self.device = device
         self.dim = 2
-        self.mesh = gaus_green_vfm_mesh(self.vtk_file_reader, L=config['length_scale'], device=device)
+        self.mesh = gaus_green_vfm_mesh(self.vtk_file_reader, 
+                                        L=config['length_scale'], 
+                                        device=device, 
+                                        bc_dict=get_bc_dict(type=config['bc_dict_type'])
+                                        )
         
         self.input_f_indices = config['branch_key_index']
-
-        # prepare mesh
-        self.mesh.add_bc_conditions(get_bc_dict(type=config['bc_dict_type']))
 
         self.pde_equations          = navier_stokes_3d # <- we can make this a map for other pdes
         self.verbose                = config['settings']['verbose']
@@ -103,6 +104,7 @@ class pde_controller():
 
         # PDE Loss
         if self.pde_loss:
+            assert out.shape[-2] == self.mesh.mesh.n_cells, f'expected {self.mesh.mesh.n_cells} but got {out.shape[-2]}'
             if Re is None and self.Re is not None: 
                 Re = torch.tensor(self.Re, dtype=torch.float32, device=out.device).reshape(1,1,1,1) # (batch,time,cells,channels)
 

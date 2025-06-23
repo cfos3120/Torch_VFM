@@ -7,7 +7,7 @@ from .vfm_mesh import *
 from .utils.data_utils import get_bc_dict
     
 class gaus_green_vfm_mesh():
-    def __init__(self, vtk_file_reader, L=1, device='cpu', dtype=torch.float32) -> None:
+    def __init__(self, vtk_file_reader, L=1, device='cpu', dtype=torch.float32, bc_dict:dict=None) -> None:
 
         self.device = device
         self.dtype = dtype
@@ -22,12 +22,15 @@ class gaus_green_vfm_mesh():
         print(MeshQuality.report_quality_metrics(self.mesh))
 
         # Find boundary indices:
-        try:
-            # TODO: replace this with VTK Boundary finder
+        #try:
+        # TODO: replace this with VTK Boundary finder
+        if bc_dict is not None:
             self.boundaries = vtk_file_reader.read()['boundary']
             for key in self.boundaries.keys():
                 self.boundaries[key] = self.boundaries[key].scale(1/L)
-        except:
+
+            self.add_bc_conditions(bc_dict)
+        else:
             self.boundaries = None
             print('No Boundary Patches Found')
         
@@ -100,14 +103,26 @@ class gaus_green_vfm_mesh():
     
     def add_bc_conditions(self, dict):
         # TODO: this can to be replaced by something more automated or in init file
-        for key1 in dict: # U or P
-            for key2 in dict[key1]: # patch
-                if 'value' in dict[key1][key2].keys():
-                    if isinstance(dict[key1][key2]['value'], list):
-                        dict[key1][key2]['value'] = dict[key1][key2]['value'][:self.mesh.dim]
-        self.bc_conditions = dict
+        filtered_dict = {
+            field: {
+                patch: settings
+                for patch, settings in field_dict.items()
+                if settings.get("type") != "empty"
+            }
+            for field, field_dict in dict.items()
+        }
+        
+        # Get all valid patch names that remained in *any* field
+        valid_patches = set().union(*[field_dict.keys() for field_dict in filtered_dict.values()])
 
-
+        filtered_second_dict = {
+            key: self.boundaries[key]
+            for key in self.boundaries.keys()
+            if key in valid_patches
+        }
+        
+        self.boundaries = filtered_second_dict
+        self.bc_conditions = filtered_dict
 
 if __name__ == '__main__':
     print('hello world')
