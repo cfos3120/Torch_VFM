@@ -1,3 +1,6 @@
+from .navier_stokes_fdm import navier_stokes_2d_cavity
+from .navier_stokes_fvm import navier_stokes_fvm
+
 
 def gradient_str(channel, mesh_dim:int=2, order:int=1, time_dim:bool=False):
     if mesh_dim == 2 and order == 1:

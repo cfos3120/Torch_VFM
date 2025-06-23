@@ -45,7 +45,8 @@ class pde_controller():
             self.limiters_dict = config['equations_limiters']
         else:
             self.limiters_dict = None
-        assert set(self.enforcement_list).issubset(set(self.get_available_losses()))
+        if self.enforcement_list:
+            assert set(self.enforcement_list).issubset(set(self.get_available_losses()))
 
     # def to(self,device):
     #     self.device = device
@@ -113,7 +114,11 @@ class pde_controller():
 
         if self.limiters_dict is not None:
             self.apply_limiters()
-        return self.balance_losses()
+        
+        if not self.enforcement_list:
+            return None
+        else:
+            return self.balance_losses()
 
     def compute_ic_loss(self, out:torch.tensor,input_solution=None,y=None):
         if input_solution is not None and self.pin_first_ts:
@@ -143,7 +148,6 @@ class pde_controller():
                 input_solution = input_solution[...,self.field_channel_idx_dict['U']]
             else:
                 input_solution = input_solution[:,:-1,:,self.field_channel_idx_dict['U']]
-
         dt_field = Temporal_Differentiator.caclulate(out[...,self.field_channel_idx_dict['U']], 
                                                      time_step=time_step, 
                                                      input_solution=input_solution, 
