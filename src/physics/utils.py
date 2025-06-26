@@ -1,5 +1,12 @@
 from .navier_stokes_fdm import navier_stokes_2d_cavity
 from .navier_stokes_fvm import navier_stokes_fvm
+from .navier_stokes_autograd import navier_stokes_2d_cavity_auto
+
+def pde_selector(method:str):
+    method_list = {'navier_stokes_2d_cavity':navier_stokes_2d_cavity,
+                   'navier_stokes_fvm':navier_stokes_fvm,
+                   'navier_stokes_2d_cavity_auto':navier_stokes_2d_cavity_auto}
+    return method_list[method]
 
 
 def gradient_str(channel, mesh_dim:int=2, order:int=1, time_dim:bool=False):
