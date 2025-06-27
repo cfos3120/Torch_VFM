@@ -1,7 +1,7 @@
 import torch
 from .operators import *
 
-def navier_stokes_3d(mesh, solution_field:torch.tensor, solution_index:dict, Re:torch.tensor, time_derivative:torch.tensor) -> torch.tensor:
+def navier_stokes_fvm(mesh, solution_field:torch.tensor, solution_index:dict, Re:torch.tensor, time_derivative:torch.tensor, **kwargs) -> torch.tensor:
     '''
     grad_dict should be a dictionary of tensors, with keys aligning to the following format:
     dp/dx for scalars and for vectors

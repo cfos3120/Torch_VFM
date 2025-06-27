@@ -1,10 +1,12 @@
 import torch
 from .gauss_green import *
 from .utils.data_utils import get_vtk_file_reader, get_bc_dict
+from .utils.training_utils import get_loss_fn
 #from .physics.navier_stokes_basic import navier_stokes_2d
 from .physics.utils import gradient_str
 from .physics.navier_stokes_fvm import *
 from .physics.navier_stokes_fdm import *
+from .physics.utils import pde_selector
 
 class pde_controller():
     def __init__(self, config: dict, device) -> None:
@@ -22,7 +24,7 @@ class pde_controller():
         
         self.input_f_indices = config['branch_key_index']
 
-        self.pde_equations          = navier_stokes_3d # <- we can make this a map for other pdes
+        self.pde_equations          = pde_selector(config['pde_equation'])
         self.verbose                = config['settings']['verbose']
         self.pin_first_ts           = config['settings']['pin_first_ts']
         self.ic_loss                = config['settings']['ic_loss']
@@ -34,22 +36,27 @@ class pde_controller():
         # indepenent control boolians:
         self.Re = 150
         self.time_step = 0.05
+        self.boundary_nodes_set = False
         
-        self.loss_fn = torch.nn.MSELoss()
+        self.loss_fn = get_loss_fn(config['loss_function'])
 
         self.epoch_loss_dict = {}
         
         self.field_channel_idx_dict = config['dataset_channels']
         self.enforcement_list = config['enforcement_list']
+
         if 'equations_limiters' in config.keys():
             self.limiters_dict = config['equations_limiters']
         else:
             self.limiters_dict = None
-        assert set(self.enforcement_list).issubset(set(self.get_available_losses()))
+        if self.enforcement_list:
+            assert set(self.enforcement_list).issubset(set(self.get_available_losses()))
 
     # def to(self,device):
     #     self.device = device
     #     self.mesh.to(device)
+    def change_pde_method(self, method:str):
+        self.pde_equations = pde_selector(method)
 
     def get_available_losses(self):
         available_losses = ['X-momentum Loss', 'Y-momentum Loss' ,'Continuity Loss', 'IC Loss']
@@ -60,9 +67,11 @@ class pde_controller():
     def balance_losses(self, method='mean'):
         if method == 'mean':
             total_loss = torch.stack([self.loss_dict[key] for key in self.enforcement_list]).sum()/len(self.loss_dict.keys())
+            return total_loss
+        elif method == None:
+            return {key:self.loss_dict[key] for key in self.enforcement_list}
         else:
             raise NotImplementedError
-        return total_loss
     
     def compute(self, 
                 out: torch.tensor, 
@@ -70,7 +79,8 @@ class pde_controller():
                 input_functions:tuple=None,
                 input_solution: torch.tensor = None, 
                 time_step=None, 
-                Re:torch.tensor=None) -> torch.tensor:
+                Re:torch.tensor=None,
+                model_input_coords:torch.tensor=None) -> torch.tensor:
         
         if input_functions is not None:
             if 'input_solution' in self.input_f_indices.keys():
@@ -109,11 +119,18 @@ class pde_controller():
                 Re = torch.tensor(self.Re, dtype=torch.float32, device=out.device).reshape(1,1,1,1) # (batch,time,cells,channels)
 
             if self.verbose: print('...Attempting to calculate PDE', flush=True)
-            self.compute_pde_loss(out, input_solution, time_step, Re)
+            self.compute_pde_loss(out=out, 
+                                  input_solution=input_solution, 
+                                  time_step=time_step, 
+                                  Re=Re, 
+                                  model_input_coords=model_input_coords)
 
         if self.limiters_dict is not None:
             self.apply_limiters()
-        return self.balance_losses()
+        if not self.enforcement_list:
+            return None
+        else:
+            return self.balance_losses(method=None)
 
     def compute_ic_loss(self, out:torch.tensor,input_solution=None,y=None):
         if input_solution is not None and self.pin_first_ts:
@@ -131,9 +148,8 @@ class pde_controller():
                          out:torch.tensor,
                          input_solution:torch.tensor=None, 
                          time_step=None, 
-                         Re:torch.tensor=None):
-        
-        
+                         Re:torch.tensor=None,
+                         model_input_coords:torch.tensor=None):
         
         if len(out.shape) == 3 and self.dt_scheme == 'steady':
             out = out.unsqueeze(1) # add time dim
@@ -143,17 +159,17 @@ class pde_controller():
                 input_solution = input_solution[...,self.field_channel_idx_dict['U']]
             else:
                 input_solution = input_solution[:,:-1,:,self.field_channel_idx_dict['U']]
-
         dt_field = Temporal_Differentiator.caclulate(out[...,self.field_channel_idx_dict['U']], 
                                                      time_step=time_step, 
                                                      input_solution=input_solution, 
                                                      method=self.dt_scheme)
         # If we need gradients for Soblov loss, lets move this outside the function
-        eqn_dict = navier_stokes_3d(self.mesh, 
+        eqn_dict = self.pde_equations(mesh=self.mesh, 
                                     solution_field=out, 
                                     solution_index=self.field_channel_idx_dict, 
                                     Re=Re.unsqueeze(1), 
-                                    time_derivative=dt_field)
+                                    time_derivative=dt_field,
+                                    model_input_coords=model_input_coords)
         
         return eqn_dict
 
@@ -161,9 +177,14 @@ class pde_controller():
                          out:torch.tensor, 
                          input_solution:torch.tensor=None, 
                          time_step=None, 
-                         Re:torch.tensor=None):
+                         Re:torch.tensor=None,
+                         model_input_coords:torch.tensor=None):
         
-        eqn_dict = self.compute_pde_field(out,input_solution,time_step,Re)
+        eqn_dict = self.compute_pde_field(out=out,
+                                          input_solution=input_solution,
+                                          time_step=time_step,
+                                          Re=Re,
+                                          model_input_coords=model_input_coords)
         eqn_loss_dict = dict.fromkeys(eqn_dict.keys())
         for key in eqn_loss_dict:
             eqn_loss_dict[key] = self.loss_fn(eqn_dict[key], torch.zeros_like(eqn_dict[key]))
@@ -188,3 +209,22 @@ class pde_controller():
         # it will automatically group it in the report making it easier
         wandb_dict = {f'pde_controller/{key}': value.item() for key, value in self.loss_dict.items()}
         return wandb_dict
+    
+    def include_boundary_idx(self,idx):
+        self.boundary_nodes_set = True
+        self.boundary_node_strt_idx = idx
+
+    def exclude_boundary_nodes(self,input):
+        if not self.boundary_nodes_set:
+            return input
+    
+        if input.shape[-1] > self.boundary_node_strt_idx:
+            # Nodes are last channel (e.g. PDE equations)
+            # Unlikely we will have more output channels than nodes
+            input = input[...,:self.boundary_node_strt_idx]
+        elif input.shape[-2] > self.boundary_node_strt_idx:
+            # If second from last dim is nodes: expected
+            input = input[...,:self.boundary_node_strt_idx,:]
+        else:
+            raise KeyError(f'{self.boundary_node_strt_idx}, is not greater than either dim -1,-2')
+        return input
