@@ -5,9 +5,24 @@ import numpy as np
 def get_loss_fn(name:str):
     loss_type_map = {'MSE':torch.nn.MSELoss(),
                      'log_MSE':log_MSE(),
-                     'LPloss':LpLoss()
+                     'LPloss':LpLoss(),
+                     'LogLpLoss':LogLpLoss(),
+                     'LogCosh':log_cosh_loss()
                      }
     return loss_type_map[name]
+
+class log_cosh_loss(object):
+    def __init__(self, stable=True):
+        self.stable = stable
+        pass
+    def stable_call(self,x,y):
+        diff = x - y
+        return torch.mean(diff + torch.nn.functional.softplus(-2.0 * diff) - torch.log(torch.tensor(2.0)))
+    def __call__(self, x, y):
+        if self.stable:
+            return self.stable_call(x, y)
+        else:
+            return torch.mean(torch.log(torch.cosh(x - y)))
 
 class log_MSE(object):
     def __init__(self):
@@ -79,4 +94,41 @@ class LpLoss(object):
     def __call__(self, x, y):
         return self.abs(x, y)
     
-# Loss Balancer
+class LogLpLoss(object):
+    '''
+    loss function with rel/abs Lp loss
+    '''
+    def __init__(self, d=2, p=2, size_average=True, reduction=True):
+        super(LogLpLoss, self).__init__()
+
+        #Dimension and Lp-norm type are postive
+        assert d > 0 and p > 0
+
+        self.d = d
+        self.p = p
+        self.reduction = reduction
+        self.size_average = size_average
+
+    def __call__(self, x, y):
+        num_examples = x.size()[0]
+        # editted this here
+        node_index = np.argmax(x.shape)
+        nodes = x.shape[node_index]
+        dim_2d = int(np.sqrt(nodes))
+        
+        #Assume uniform mesh
+        h = 1.0 / (dim_2d - 1.0) # this is technically dx or dy
+
+        # lets try this:
+        #h = 1
+
+        #all_norms = (h**(self.d/self.p))*torch.norm(x.reshape(num_examples,-1) - y.reshape(num_examples,-1), self.p, 1)
+        log_scaled_norms = torch.log1p(torch.norm(x.reshape(num_examples,-1) - y.reshape(num_examples,-1)) + 1e-8)
+
+        if self.reduction:
+            if self.size_average:
+                return torch.mean(log_scaled_norms)
+            else:
+                return torch.sum(log_scaled_norms)
+
+        return all_norms

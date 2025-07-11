@@ -37,6 +37,7 @@ class pde_controller():
         self.Re = 150
         self.time_step = 0.05
         self.boundary_nodes_set = False
+        self.weight_pde = config['Re_batch_weight']
         
         self.loss_fn = get_loss_fn(config['loss_function'])
 
@@ -185,9 +186,13 @@ class pde_controller():
                                           time_step=time_step,
                                           Re=Re,
                                           model_input_coords=model_input_coords)
+        
         eqn_loss_dict = dict.fromkeys(eqn_dict.keys())
         for key in eqn_loss_dict:
-            eqn_loss_dict[key] = self.loss_fn(eqn_dict[key], torch.zeros_like(eqn_dict[key]))
+            if self.weight_pde:
+                eqn_loss_dict[key] = self.loss_fn(eqn_dict[key]*Re.reshape(-1,1,1), torch.zeros_like(eqn_dict[key]))
+            else:
+                eqn_loss_dict[key] = self.loss_fn(eqn_dict[key], torch.zeros_like(eqn_dict[key]))
             self.loss_dict[f'{key} Loss'] = eqn_loss_dict[key]
 
         return eqn_loss_dict
