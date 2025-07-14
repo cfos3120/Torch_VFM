@@ -23,7 +23,7 @@ def get_relaxation_map(name, cells, dx=None, boundary_points=None, power=1, dims
                               boundary_points=boundary_points, 
                               power=power, 
                               dims=dims, 
-                              cell_multiples=cell_multiples)
+                              cell_multiples=cell_multiples).reshape(1,1,-1,1)
 
 
 def relaxation_sdf_map(cells, 

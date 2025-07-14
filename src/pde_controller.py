@@ -7,6 +7,7 @@ from .physics.utils import gradient_str
 from .physics.navier_stokes_fvm import *
 from .physics.navier_stokes_fdm import *
 from .physics.utils import pde_selector
+from .utils.relaxation_map import get_relaxation_map
 
 class pde_controller():
     def __init__(self, config: dict, device) -> None:
@@ -32,6 +33,8 @@ class pde_controller():
         self.mom_eqn_skip_first_ts  = config['settings']['mom_eqn_skip_first_ts']
         self.soblov_norms           = config['settings']['soblov_norms']
         self.dt_scheme              = config['settings']['dt_scheme']
+        self.pde_relaxation_map     = config['settings']['relaxation_map']
+
 
         # indepenent control boolians:
         self.Re = 150
@@ -52,6 +55,11 @@ class pde_controller():
             self.limiters_dict = None
         if self.enforcement_list:
             assert set(self.enforcement_list).issubset(set(self.get_available_losses()))
+
+        if self.pde_relaxation_map:
+            self.sdf_map = get_relaxation_map('cavity', self.mesh.mesh.cell_centers, power=4, dims=[0,1], cell_multiples=10)
+        else: 
+            self.sdf_map = 1
 
     # def to(self,device):
     #     self.device = device
@@ -192,7 +200,7 @@ class pde_controller():
             if self.weight_pde:
                 eqn_loss_dict[key] = self.loss_fn(eqn_dict[key]*Re.reshape(-1,1,1), torch.zeros_like(eqn_dict[key]))
             else:
-                eqn_loss_dict[key] = self.loss_fn(eqn_dict[key], torch.zeros_like(eqn_dict[key]))
+                eqn_loss_dict[key] = self.loss_fn(eqn_dict[key]*self.sdf_map, torch.zeros_like(eqn_dict[key]))
             self.loss_dict[f'{key} Loss'] = eqn_loss_dict[key]
 
         return eqn_loss_dict
