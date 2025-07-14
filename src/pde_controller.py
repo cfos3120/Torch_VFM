@@ -33,7 +33,7 @@ class pde_controller():
         self.mom_eqn_skip_first_ts  = config['settings']['mom_eqn_skip_first_ts']
         self.soblov_norms           = config['settings']['soblov_norms']
         self.dt_scheme              = config['settings']['dt_scheme']
-        self.pde_relaxation_map     = config['settings']['relaxation_map']
+        self.pde_relaxation_map     = config['relaxation_map']
 
 
         # indepenent control boolians:

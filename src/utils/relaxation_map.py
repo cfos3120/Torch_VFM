@@ -23,7 +23,7 @@ def get_relaxation_map(name, cells, dx=None, boundary_points=None, power=1, dims
                               boundary_points=boundary_points, 
                               power=power, 
                               dims=dims, 
-                              cell_multiples=cell_multiples).reshape(1,1,-1,1)
+                              cell_multiples=cell_multiples).reshape(1,1,-1)
 
 
 def relaxation_sdf_map(cells, 
@@ -46,13 +46,14 @@ def relaxation_sdf_map(cells,
         resolution = int(np.sqrt(nodes)) 
         dx = 1/(resolution)
 
+    problem_points = problem_points.to(cells.device)
     deltas = cells[...,dims].unsqueeze(1) - problem_points.unsqueeze(0)
     dists = torch.norm(deltas, dim=2)  # (N, M)
 
     # SDF: minimum distance to any problem cell for each cell
     sdf = dists.min(dim=1).values  # (N,)
     sdf= torch.clamp(sdf, max=cell_multiples*dx)/(cell_multiples*dx)
-    sdf_np = sdf.reshape(resolution, resolution).numpy()
+    #sdf_np = sdf.reshape(resolution, resolution).numpy()
 
-    adjusted_sdf = sdf_np**power
+    adjusted_sdf = sdf**power
     return adjusted_sdf
