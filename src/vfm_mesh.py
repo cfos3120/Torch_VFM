@@ -11,10 +11,20 @@ class vfm_mesh_geometry():
         self.n_cells = mesh.n_cells
         self.n_points = mesh.n_points
         self.vertices = torch.tensor(mesh.points, dtype=self.dtype, device=self.device)
-        self.cell_centers = torch.tensor(compute_true_geometric_centroid(mesh), dtype=self.dtype, device=self.device)
-        self.cell_volumes = torch.tensor(mesh.compute_cell_sizes()["Volume"], dtype=self.dtype, device=self.device)
+        try:
+            print('Trying to fetch cell centers and volume from mesh...')
+            self.cell_centers = torch.tensor(mesh.cell_data['C'], dtype=self.dtype, device=self.device)
+            self.cell_volumes = torch.tensor(mesh.cell_data['Vc'], dtype=self.dtype, device=self.device)
+            print('Cell centers and Volumes fetched successfully')
+        except Exception as e:
+            print('An error was encountered when trying to read Cell and Volume files\n',e,
+                  '\nManually calculating cell centers and volume for mesh...')
+            self.cell_centers = torch.tensor(compute_true_geometric_centroid(mesh), dtype=self.dtype, device=self.device)
+            self.cell_volumes = torch.tensor(mesh.compute_cell_sizes()["Volume"], dtype=self.dtype, device=self.device)
+
         self._fetch_vtk_faces(mesh)
         self._face_connectivity()
+        
         self._calculate_face_centers_and_areas()
         self._connectivity_vectors()
         #self._correct_vector_direction()
