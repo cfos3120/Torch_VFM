@@ -13,7 +13,7 @@ class gaus_green_vfm_mesh():
         self.dtype = dtype
         
         # Read in Mesh in VTK
-        vtk_file_reader.set_active_time_value(vtk_file_reader.time_values[-1])
+        vtk_file_reader.set_active_time_value(vtk_file_reader.time_values[0])
         vtk_file_reader.cell_to_point_creation = False
         vtk_file_reader.enable_all_patch_arrays()
         self.vtk_mesh = vtk_file_reader.read()[0].scale(1/L)
