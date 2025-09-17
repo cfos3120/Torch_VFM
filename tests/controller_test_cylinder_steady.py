@@ -59,6 +59,7 @@ gt_gradp = torch.tensor(mesh.vtk_mesh.cell_data['grad(p)'])
 plot_comparison(mesh.vtk_mesh, None, f'None',i=0, interactive = True, point_label=False,
                     prediction = lap_pred.squeeze(0).squeeze(0),
                     ground_truth = gt_lap.squeeze(0).squeeze(0),
-                    #clims3=[-10,10],
+                    clims=[-10,10],
+                    clims2=[-10,10],
                     zoom=True
                     )
