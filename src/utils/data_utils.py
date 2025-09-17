@@ -42,6 +42,21 @@ def get_bc_dict(file=None, type=None):
                 }
             return {'U':U_bc_dict, 'p':p_bc_dict}
         
+        if type == 'building_steady':
+            U_bc_dict = {
+                'inlet':{ "type":'fixedValue', "value":[1,0,0] },
+                'out':{ "type":'zeroGradient', },  
+                'building':{ "type":'noSlip'},
+                'ground':{ "type":'noSlip' },   
+                }
+            p_bc_dict = {
+                'inlet':{ "type":'zeroGradient' },
+                'out':{ "type":'zeroGradient' },  
+                'building':{ "type":'zeroGradient' } ,
+                'ground':{ "type":'zeroGradient' },
+                }
+            return {'U':U_bc_dict, 'p':p_bc_dict}
+        
         elif type == 'cylinder_steady':
             U_bc_dict = {
                 'inlet':{ "type":'fixedValue', "value":[1,0,0] },

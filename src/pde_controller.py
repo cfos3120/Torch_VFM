@@ -16,13 +16,13 @@ class pde_controller():
         file_name = config['mesh_file_pointer']
         self.vtk_file_reader = get_vtk_file_reader(file_name)
         self.device = device
-        self.dim = 2
+        self.dim = config['dim'] or 2
         self.mesh = gaus_green_vfm_mesh(self.vtk_file_reader, 
                                         L=config['length_scale'], 
                                         device=device, 
                                         bc_dict=get_bc_dict(type=config['bc_dict_type'])
                                         )
-        
+
         self.input_f_indices = config['branch_key_index']
 
         self.pde_equations          = pde_selector(config['pde_equation'])
@@ -34,6 +34,7 @@ class pde_controller():
         self.soblov_norms           = config['settings']['soblov_norms']
         self.dt_scheme              = config['settings']['dt_scheme']
         self.pde_relaxation_map     = config['relaxation_map']
+        self.pde_compare            = config['settings']['pde_compare']
 
 
         # indepenent control boolians:
@@ -132,7 +133,8 @@ class pde_controller():
                                   input_solution=input_solution, 
                                   time_step=time_step, 
                                   Re=Re, 
-                                  model_input_coords=model_input_coords)
+                                  model_input_coords=model_input_coords,
+                                  y=y)
 
         if self.limiters_dict is not None:
             self.apply_limiters()
@@ -178,7 +180,8 @@ class pde_controller():
                                     solution_index=self.field_channel_idx_dict, 
                                     Re=Re.unsqueeze(1), 
                                     time_derivative=dt_field,
-                                    model_input_coords=model_input_coords)
+                                    model_input_coords=model_input_coords,
+                                    settings=self.config['settings'])
         
         return eqn_dict
 
@@ -187,7 +190,8 @@ class pde_controller():
                          input_solution:torch.tensor=None, 
                          time_step=None, 
                          Re:torch.tensor=None,
-                         model_input_coords:torch.tensor=None):
+                         model_input_coords:torch.tensor=None,
+                         y:torch.tensor=None):
         
         eqn_dict = self.compute_pde_field(out=out,
                                           input_solution=input_solution,
@@ -196,13 +200,28 @@ class pde_controller():
                                           model_input_coords=model_input_coords)
         
         eqn_loss_dict = dict.fromkeys(eqn_dict.keys())
-        for key in eqn_loss_dict:
-            if self.weight_pde:
-                eqn_loss_dict[key] = self.loss_fn(eqn_dict[key]*Re.reshape(-1,1,1), torch.zeros_like(eqn_dict[key]))
-            else:
-                eqn_loss_dict[key] = self.loss_fn(eqn_dict[key]*self.sdf_map, torch.zeros_like(eqn_dict[key]))
-            self.loss_dict[f'{key} Loss'] = eqn_loss_dict[key]
-
+        
+        if self.pde_compare:
+            assert y is not None, 'Need to pass in ground truth to calculate gt PDE for comparison'
+            gt_eqn_dict = self.compute_pde_field(out=y,
+                                          input_solution=input_solution,
+                                          time_step=time_step,
+                                          Re=Re,
+                                          model_input_coords=model_input_coords)
+            for key in eqn_loss_dict:
+                eqn_loss_dict[key] = self.loss_fn(eqn_dict[key]*self.sdf_map, gt_eqn_dict[key]*self.sdf_map)
+                self.loss_dict[f'{key} Loss'] = eqn_loss_dict[key]
+        else:
+            for key in eqn_loss_dict:
+                if self.weight_pde:
+                    eqn_loss_dict[key] = self.loss_fn(eqn_dict[key]*Re.reshape(-1,1,1), torch.zeros_like(eqn_dict[key]))
+                else:
+                    eqn_loss_dict[key] = self.loss_fn(eqn_dict[key]*self.sdf_map, torch.zeros_like(eqn_dict[key]))
+                self.loss_dict[f'{key} Loss'] = eqn_loss_dict[key]
+        
+        if not self.config['settings']['volume_direct_scaling']:
+            for key in eqn_loss_dict:
+                eqn_loss_dict[key] = eqn_loss_dict[key]*self.config['settings']['total_multipier']
         return eqn_loss_dict
     
     def apply_limiters(self) -> None:

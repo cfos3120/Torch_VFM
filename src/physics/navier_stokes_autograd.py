@@ -24,11 +24,11 @@ def navier_stokes_2d_cavity_auto(model_input_coords:torch.tensor, solution_field
     p_x = p_out[..., 0]
     p_y = p_out[..., 1]
     
-    # Second Derivatives
-    u_xx = torch.autograd.grad(u_x.sum(), model_input_coords, create_graph=True, retain_graph=True)[0][..., 0]
-    u_yy = torch.autograd.grad(u_y.sum(), model_input_coords, create_graph=True, retain_graph=True)[0][..., 1]
-    v_xx = torch.autograd.grad(v_x.sum(), model_input_coords, create_graph=True, retain_graph=True)[0][..., 0]
-    v_yy = torch.autograd.grad(v_y.sum(), model_input_coords, create_graph=True, retain_graph=True)[0][..., 1]
+    # Second DerivativesTrue
+    u_xx = torch.autograd.grad(u_x.sum(), model_input_coords, create_graph=False, retain_graph=True)[0][..., 0]
+    u_yy = torch.autograd.grad(u_y.sum(), model_input_coords, create_graph=False, retain_graph=True)[0][..., 1]
+    v_xx = torch.autograd.grad(v_x.sum(), model_input_coords, create_graph=False, retain_graph=True)[0][..., 0]
+    v_yy = torch.autograd.grad(v_y.sum(), model_input_coords, create_graph=False, retain_graph=True)[0][..., 1]
 
     # Continuity equation
     f0 = u_x + v_y
