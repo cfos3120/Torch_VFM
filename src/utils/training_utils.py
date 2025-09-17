@@ -92,7 +92,10 @@ class LpLoss(object):
         return diff_norms/y_norms
 
     def __call__(self, x, y):
-        return self.abs(x, y)
+        if not torch.any(y):
+            return self.abs(x, y)
+        else:
+            return self.rel(x, y)
     
 class LogLpLoss(object):
     '''

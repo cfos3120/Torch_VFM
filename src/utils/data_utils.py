@@ -17,11 +17,11 @@ def vtk_boundary_finder():
     # additionally, we want to be able to parse a flag map from a vtp file (instead)
 
 def get_bc_dict(file=None, type=None):
-
+    print(f'Loading Boundary conditions for {type}')
     if file == None:
         assert type is not None
+        
         if type == 'cylinder':
-            print('resorting to default cylinder flow bc_dict, this line needs to be superseeded')
             U_bc_dict = {
                 'in':{ "type":'fixedValue', "value":[1,0,0] },
                 'out':{ "type":'zeroGradient', },  
@@ -41,8 +41,38 @@ def get_bc_dict(file=None, type=None):
                 'back':{ "type":'empty' }     
                 }
             return {'U':U_bc_dict, 'p':p_bc_dict}
+        
+        if type == 'building_steady':
+            U_bc_dict = {
+                'inlet':{ "type":'fixedValue', "value":[1,0,0] },
+                'out':{ "type":'zeroGradient', },  
+                'building':{ "type":'noSlip'},
+                'ground':{ "type":'noSlip' },   
+                }
+            p_bc_dict = {
+                'inlet':{ "type":'zeroGradient' },
+                'out':{ "type":'zeroGradient' },  
+                'building':{ "type":'zeroGradient' } ,
+                'ground':{ "type":'zeroGradient' },
+                }
+            return {'U':U_bc_dict, 'p':p_bc_dict}
+        
+        elif type == 'cylinder_steady':
+            U_bc_dict = {
+                'inlet':{ "type":'fixedValue', "value":[1,0,0] },
+                'outlet':{ "type":'zeroGradient'},  
+                'cylinder':{ "type":'noSlip'},  
+                'frontAndBack':{ "type":'empty'}, 
+                }
+            p_bc_dict = {
+                'inlet':{ "type":'zeroGradient' },
+                'outlet':{ "type":'zeroGradient'},  
+                'cylinder':{ "type":'zeroGradient'},  
+                'frontAndBack':{ "type":'empty' } ,
+                }
+            return {'U':U_bc_dict, 'p':p_bc_dict}
+        
         elif type == 'cavity':
-            print('resorting to default cavity flow bc_dict, this line needs to be superseeded')
             U_bc_dict = {
                 'movingWall':{ "type":'fixedValue', "value":[1,0,0] },
                 'fixedWalls':{ "type":'noSlip'},  

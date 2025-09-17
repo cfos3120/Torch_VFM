@@ -1,7 +1,7 @@
 import torch
 from .operators import *
 
-def navier_stokes_fvm(mesh, solution_field:torch.tensor, solution_index:dict, Re:torch.tensor, time_derivative:torch.tensor, **kwargs) -> torch.tensor:
+def navier_stokes_fvm(mesh, solution_field:torch.tensor, solution_index:dict, Re:torch.tensor, time_derivative:torch.tensor, settings=None, **kwargs) -> torch.tensor:
     '''
     grad_dict should be a dictionary of tensors, with keys aligning to the following format:
     dp/dx for scalars and for vectors
@@ -46,5 +46,12 @@ def navier_stokes_fvm(mesh, solution_field:torch.tensor, solution_index:dict, Re
         equations['Continuity'] = dudx + dvdy + dwdz
         equations['Z-momentum'] = momentum_equations[...,2]
 
+    if settings['volume_weighted']:
+        if settings['volume_direct_scaling']:
+            multiplier = mesh.mesh.cell_volumes.reshape(1,1,-1)*settings['total_multipier']
+        else:
+            multiplier = mesh.mesh.cell_volumes.reshape(1,1,-1)
+        for key, values in equations.items():
+            equations[key] = multiplier*values
 
     return equations

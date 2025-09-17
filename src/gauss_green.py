@@ -53,7 +53,8 @@ class gaus_green_vfm_mesh():
                                                 dtype=self.dtype)
 
         for i, face_key in enumerate(self.mesh.internal_faces):
-            p1, p2, p3, p4 = self.mesh.vertices[self.mesh.faces[face_key]]
+            points = self.mesh.vertices[self.mesh.faces[face_key]]
+            p1, p2, p3 = points[0], points[1], points[2]
             A, B, C, D = plane_equation_from_points(p1.cpu(), p2.cpu(), p3.cpu())
 
             # Line direction vector
