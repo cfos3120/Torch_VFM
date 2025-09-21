@@ -7,19 +7,28 @@ class vfm_mesh_geometry():
     def __init__(self, mesh, device='cpu', dtype=torch.float32) -> None:
         self.device = device
         self.dtype = dtype
-        self.dim = 3    # TODO: we can adjust for 2D meshes later
+        self.dim = 3    # TODO: we can reduce this for 2D meshes later to save on compute
         self.n_cells = mesh.n_cells
         self.n_points = mesh.n_points
         self.vertices = torch.tensor(mesh.points, dtype=self.dtype, device=self.device)
         try:
-            print('Trying to fetch cell centers and volume from mesh...')
+            print('Trying to fetch cell centers and volume from Openfoam Data mesh...')
             self.cell_centers = torch.tensor(mesh.cell_data['C'], dtype=self.dtype, device=self.device)
             self.cell_volumes = torch.tensor(mesh.cell_data['Vc'], dtype=self.dtype, device=self.device)
             print('Cell centers and Volumes fetched successfully')
+            
+            #if np.abs((mesh.cell_centers().points - mesh.cell_data['C'])/(mesh.cell_data['C'])).max() >= 1e-3:
+            #    raise ValueError('WARNING: VTK cell_centers() do not align well with OpenFoam "C" cell centers',
+            #                     'Resorting to VTK geometry for volume and cell centers over OpenFoam values')
         except Exception as e:
-            print('An error was encountered when trying to read Cell and Volume files\n',e,
+            print('An error was encountered when trying to load Cell and Volume files\n',e,
                   '\nManually calculating cell centers and volume for mesh...')
-            self.cell_centers = torch.tensor(compute_true_geometric_centroid(mesh), dtype=self.dtype, device=self.device)
+            try:
+                self.cell_centers = torch.tensor(compute_true_geometric_centroid(mesh), dtype=self.dtype, device=self.device)
+                print('Successfully Calculated True Geometric Cell Centroids')
+            except:
+                print('Calculating True Geometric Cell Centroids failed... Resorting to VTK cell_centers()')
+                self.cell_centers = torch.tensor(mesh.cell_centers().points, dtype=self.dtype, device=self.device)
             self.cell_volumes = torch.tensor(mesh.compute_cell_sizes()["Volume"], dtype=self.dtype, device=self.device)
 
         self._fetch_vtk_faces(mesh)

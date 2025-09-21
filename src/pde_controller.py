@@ -16,7 +16,7 @@ class pde_controller():
         file_name = config['mesh_file_pointer']
         self.vtk_file_reader = get_vtk_file_reader(file_name)
         self.device = device
-        self.dim = config['dim'] or 2
+        self.dim = config['dim']
         self.mesh = gaus_green_vfm_mesh(self.vtk_file_reader, 
                                         L=config['length_scale'], 
                                         device=device, 
@@ -72,6 +72,7 @@ class pde_controller():
         available_losses = ['X-momentum Loss', 'Y-momentum Loss' ,'Continuity Loss', 'IC Loss']
         if self.dim == 3:
             available_losses += ['Z-momentum Loss']
+        print('available losses:', available_losses)
         return available_losses
 
     def balance_losses(self, method='mean'):
