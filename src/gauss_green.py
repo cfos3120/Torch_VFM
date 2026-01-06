@@ -5,6 +5,7 @@ import pyvista as pv
 from .utils.mesh_utils import *
 from .vfm_mesh import *
 from .utils.data_utils import get_bc_dict
+from types import SimpleNamespace
     
 class gaus_green_vfm_mesh():
     def __init__(self, vtk_file_reader, L=1, device='cpu', dtype=torch.float32, bc_dict:dict=None) -> None:
@@ -124,6 +125,63 @@ class gaus_green_vfm_mesh():
         
         self.boundaries = filtered_second_dict
         self.bc_conditions = filtered_dict
+
+class periodic_isometric_vfm_mesh(object):
+    def __init__(self, L=2*np.pi, S=64, device='cpu', dtype=torch.float32):
+        
+        self.device = torch.device(device)
+        face_length = 2*np.pi/S
+        cell_area = face_length**2
+
+        self.mesh = SimpleNamespace()
+        self.mesh.dim = 3 # default is 3, not sure if operators optimized for 2D
+        self.mesh.n_cells = S**2
+        self.mesh.patch_face_keys = {} # periodicity enforced through cell neighbours
+        self.mesh.face_owners, self.mesh.face_neighbors, normals = create_periodic_fvm_connectivity(S)
+        self.mesh.face_areas = normals.to(dtype)*face_length
+        self.mesh.num_internal_faces = len(self.mesh.face_owners)
+        self.mesh.internal_faces = torch.arange(self.mesh.num_internal_faces)
+        self.mesh.face_areas_mag = torch.tensor([face_length],dtype=dtype).repeat(self.mesh.num_internal_faces)
+        self.mesh.cell_volumes = torch.tensor([cell_area],dtype=dtype).repeat(self.mesh.n_cells) 
+
+        # create cell_centres
+        self.mesh.cell_centers = self.fetch_2d_grid(L, S)
+        self.mesh.cell_center_vectors = self.mesh.cell_centers[self.mesh.face_neighbors] - self.mesh.cell_centers[self.mesh.face_owners]
+
+        # none `mesh` namespace objects
+        self.correction_method = None
+        self.delta = normals.to(dtype)
+        self.delta_mag = torch.norm(self.delta, dim=-1, keepdim=False) # should be all ones because they are unit vectors
+        self.d = self.mesh.cell_center_vectors
+        self.d_mag = torch.norm(self.d, dim=-1, keepdim=False)
+        self.internal_face_weights = torch.tensor([0.5]).repeat(self.mesh.num_internal_faces) # equidistant on isometric mesh
+        
+        # expand to 3D:
+        if self.mesh.dim == 3:
+            self.mesh.face_areas = torch.nn.functional.pad(self.mesh.face_areas, (0, 1), value=0.0)
+            self.delta = torch.nn.functional.pad(self.delta, (0, 1), value=0.0)
+            self.d = torch.nn.functional.pad(self.delta, (0, 1), value=0.0)
+
+        # send all to device
+        self.to(device)
+        
+    def fetch_2d_grid(self,L, S):
+        line_grid = np.linspace(0,2*np.pi,S+1, endpoint=True)[1:]
+        line_grid = line_grid-(line_grid[-1]-line_grid[-2])/2
+        X, Y = np.meshgrid(line_grid,line_grid, indexing='ij')
+        coords = np.concatenate([X[...,None], Y[...,None]], axis=-1)
+        coords_r = torch.tensor(coords.reshape(-1,2))
+        return coords_r
+
+    def to(self,device):
+        for attr_name, attr_value in vars(self.mesh).items():
+            if isinstance(attr_value, torch.Tensor):
+                setattr(self.mesh, attr_name, attr_value.to(device))
+
+        for attr_name, attr_value in vars(self).items():
+            if isinstance(attr_value, torch.Tensor):
+                setattr(self, attr_name, attr_value.to(device))
+
 
 if __name__ == '__main__':
     print('hello world')

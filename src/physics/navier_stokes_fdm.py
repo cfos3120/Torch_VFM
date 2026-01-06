@@ -63,3 +63,34 @@ def navier_stokes_2d_cavity(solution_field:torch.tensor, solution_index:dict, Re
     f2 = f2.view(B, T, H * W)
 
     return {'Continuity':f0, 'X-momentum':f1, 'Y-momentum':f2}
+
+def periodic_derivatives(x, dx=1.0, dy=1.0):
+    """
+    Compute first and second derivatives with 2nd-order central differences
+    and periodic BCs.
+    
+    x: tensor of shape (B, N, N) or (B, N, N, C)
+    dx, dy: grid spacing
+    
+    Returns:
+        dx1, dy1 : first derivatives
+        dx2, dy2 : second derivatives
+    """
+
+    # shift along x-direction (dim=1)
+    x_ip = torch.roll(x, shifts=-1, dims=1)
+    x_im = torch.roll(x, shifts=+1, dims=1)
+
+    # shift along y-direction (dim=2)
+    y_ip = torch.roll(x, shifts=-1, dims=2)
+    y_im = torch.roll(x, shifts=+1, dims=2)
+
+    # First derivatives: (f[i+1] - f[i-1]) / (2*dx)
+    dx1 = (x_ip - x_im) / (2.0 * dx)
+    dy1 = (y_ip - y_im) / (2.0 * dy)
+
+    # Second derivatives: (f[i+1] - 2f[i] + f[i-1]) / dx^2
+    dx2 = (x_ip - 2.0 * x + x_im) / (dx * dx)
+    dy2 = (y_ip - 2.0 * x + y_im) / (dy * dy)
+
+    return dx1, dy1, dx2, dy2

@@ -81,6 +81,7 @@ Divergence Operator:
 Takes the Gauss-Green Object and its mesh
 Returns the Divergence calculated with advecting of the field i.e Nabla dot (UU),
 Also returns the Gradient field to save computation.
+Gradient output has channel order: [dudx,dvdx,dudy,dvdy]
 '''
 class Divergence_Operator():
     
@@ -160,10 +161,13 @@ class Laplacian_Operator():
     def caclulate(self, field:torch.tensor, field_type:str = 'U', correction_method:str=None, gradient_field:torch.tensor=None) -> torch.tensor:
         
         # initialize laplacian field
+        if len(field.shape) == 3 and field_type == 'p':
+            field.unsqueeze(-1)
         batch_size = field.shape[0]
         time_size = field.shape[1]
+        channel_size = field.shape[-1]
 
-        lap_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, self.mesh.dim), dtype=field.dtype, device=self.device)
+        lap_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, channel_size), dtype=field.dtype, device=self.device)
 
         lap_field = Laplacian_Operator.internal_flux(self, lap_field, field, gradient_field=gradient_field)
         lap_field = Laplacian_Operator.boundary_flux(self, lap_field, field, field_type)
@@ -171,7 +175,7 @@ class Laplacian_Operator():
 
         if correction_method is not None:
             assert gradient_field is not None
-            correction_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, self.mesh.dim), dtype=field.dtype, device=self.device)
+            correction_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, channel_size), dtype=field.dtype, device=self.device)
             correction_field = Laplacian_Operator.internal_flux(self, correction_field, field = field, gradient_field=gradient_field, orthogonal=False, implicit=False)
             #correction_field = Laplacian_Operator.boundary_flux(self, correction_field, field, field_type, orth_vector='k')
             correction_field/= self.mesh.cell_volumes.reshape(1,1,-1,1)
@@ -242,3 +246,56 @@ class Laplacian_Operator():
             lap_field.index_add_(2, self.mesh.face_owners[patch_faces], diffusion)
 
         return lap_field
+    
+'''
+Second Order derivative Operator:
+Takes the Gauss-Green Object and its mesh + supplementary vectors (associated with orthogonality)
+Returns the Second Order derivative tensor calculated with specified implicitly/explicitly and/or non-orthogonal corrections
+TODO: 1. Implement non-orthogonal corrections
+      2. Add Boundary conditions
+If field is a vector: output channels in order: [dudxx, dvdxx, ... ,dudyy, dvdyy] (mixed derivatives dxy dyy not validated)
+Can handle higher spatial dimensions such as 3D, given mesh information present.
+'''
+class Gradient_2nd_Operator():
+    
+    @staticmethod
+    def caclulate(self, field: torch.Tensor, field_type:str = 'U') -> torch.Tensor:
+        
+        if len(field.shape) == 3 and field_type == 'p':
+            field.unsqueeze(-1)
+        batch_size = field.shape[0]
+        time_size = field.shape[1]
+        channel_size = field.shape[-1]
+
+        div_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, channel_size), dtype=field.dtype, device=self.device)
+        grad_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, self.mesh.dim, self.mesh.dim*channel_size), dtype=field.dtype, device=self.device)
+        
+        grad_field = Gradient_2nd_Operator.internal_flux(self, grad_field, field)
+        #div_field, grad_field = Divergence_Operator.boundary_flux(self, div_field, grad_field, field, field_type)
+        #div_field/= self.mesh.cell_volumes.reshape(1,1,-1,1)
+        grad_field/= self.mesh.cell_volumes.reshape(1,1,-1,1,1)
+        return grad_field.flatten(start_dim=-2)
+
+    def internal_flux(self, grad_field:torch.tensor, field:torch.tensor, implicit:bool=True, orthogonal:bool=True) -> torch.Tensor:
+        idx = self.mesh.internal_faces
+
+        # Orthogonal
+        if orthogonal:
+            orth_vector = self.delta[idx]
+            orth_vector_mag = self.delta_mag[idx]
+        else:
+            orth_vector = self.k_vector[idx]
+            orth_vector_mag = self.k_vector_mag[idx]
+        
+        if implicit:
+            face_gradients = torch.einsum('btfd,fe->btfed', (field[:,:,self.mesh.face_neighbors[idx], :] - field[:,:,self.mesh.face_owners[idx],:]), self.d[idx])*(1/self.d_mag[idx]).reshape(1,1,-1,1,1)
+            face_gradients = face_gradients.flatten(start_dim=-2)
+            gradient = torch.einsum('btfd,fe->btfed', face_gradients, orth_vector[idx]) # note orth vector has area encoded
+        else:
+            raise NotImplementedError
+
+        print(self.mesh.face_owners[idx].shape, gradient.shape, grad_field.shape)
+        grad_field.index_add_(2, self.mesh.face_owners[idx], gradient)
+        grad_field.index_add_(2, self.mesh.face_neighbors[idx], -gradient)
+
+        return grad_field
