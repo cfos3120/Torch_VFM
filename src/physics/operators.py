@@ -294,7 +294,6 @@ class Gradient_2nd_Operator():
         else:
             raise NotImplementedError
 
-        print(self.mesh.face_owners[idx].shape, gradient.shape, grad_field.shape)
         grad_field.index_add_(2, self.mesh.face_owners[idx], gradient)
         grad_field.index_add_(2, self.mesh.face_neighbors[idx], -gradient)
 
