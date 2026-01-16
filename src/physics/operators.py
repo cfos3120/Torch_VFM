@@ -126,7 +126,7 @@ class Divergence_Operator():
             if patch_type in ('empty','noSlip'):
                 continue
             if patch_type == 'fixedValue':
-                field_value = torch.tensor(self.bc_conditions[field_type][patch_name]['value'], dtype=self.dtype, device=self.device)
+                field_value = torch.tensor(self.bc_conditions[field_type][patch_name]['value'][:self.mesh.dim], dtype=self.dtype, device=self.device)
                 face_values = field_value.reshape(1, 1, 1, -1).repeat(batch_size, time_size, len(patch_faces), 1)
             elif patch_type == 'symmetryPlane':
                 face_values = field[...,self.mesh.face_owners[patch_faces],:] - 2*(torch.einsum('btfc,fc->btf', 
@@ -233,7 +233,7 @@ class Laplacian_Operator():
 
             if patch_type == 'fixedValue':
                 field_value = field[:,:,self.mesh.face_owners[patch_faces],:]
-                bc_value = torch.tensor(self.bc_conditions[field_type][patch_name]['value'], dtype=self.dtype, device=self.device)
+                bc_value = torch.tensor(self.bc_conditions[field_type][patch_name]['value'][self.mesh.dim], dtype=self.dtype, device=self.device)
                 diffusion = (bc_value.reshape(1,1,1,-1)-field_value)*orth_coefficient.reshape(1,1,-1,1)
 
             elif patch_type == 'noSlip':
@@ -271,8 +271,7 @@ class Gradient_2nd_Operator():
         grad_field = torch.zeros((batch_size, time_size, self.mesh.n_cells, self.mesh.dim, self.mesh.dim*channel_size), dtype=field.dtype, device=self.device)
         
         grad_field = Gradient_2nd_Operator.internal_flux(self, grad_field, field)
-        #div_field, grad_field = Divergence_Operator.boundary_flux(self, div_field, grad_field, field, field_type)
-        #div_field/= self.mesh.cell_volumes.reshape(1,1,-1,1)
+        grad_field = Gradient_2nd_Operator.boundary_flux(self, grad_field, field, field_type)
         grad_field/= self.mesh.cell_volumes.reshape(1,1,-1,1,1)
         return grad_field.flatten(start_dim=-2)
 
@@ -290,11 +289,37 @@ class Gradient_2nd_Operator():
         if implicit:
             face_gradients = torch.einsum('btfd,fe->btfed', (field[:,:,self.mesh.face_neighbors[idx], :] - field[:,:,self.mesh.face_owners[idx],:]), self.d[idx])*(1/self.d_mag[idx]).reshape(1,1,-1,1,1)
             face_gradients = face_gradients.flatten(start_dim=-2)
-            gradient = torch.einsum('btfd,fe->btfed', face_gradients, orth_vector[idx]) # note orth vector has area encoded
+            gradient = torch.einsum('btfd,fe->btfed', face_gradients, orth_vector) # note orth vector has area encoded
         else:
             raise NotImplementedError
 
         grad_field.index_add_(2, self.mesh.face_owners[idx], gradient)
         grad_field.index_add_(2, self.mesh.face_neighbors[idx], -gradient)
+
+        return grad_field
+    
+    @staticmethod
+    def boundary_flux(self, grad_field:torch.tensor, field:torch.tensor, field_type:str='U') -> torch.tensor:
+        for patch_name, patch_faces in self.mesh.patch_face_keys.items():
+            patch_type = self.bc_conditions[field_type][patch_name]['type']
+            
+            if patch_type in ('empty', 'symmetryPlane', 'zeroGradient'):
+                continue
+            else:
+            
+                if patch_type == 'fixedValue':
+                    field_value = field[:,:,self.mesh.face_owners[patch_faces],:]
+                    bc_value = torch.tensor(self.bc_conditions[field_type][patch_name]['value'][:self.mesh.dim], dtype=self.dtype, device=self.device)
+                    face_gradients = torch.einsum('btfd,fe->btfed', (bc_value.reshape(1,1,1,-1)-field_value), self.d[patch_faces])*(1/self.d_mag[patch_faces]).reshape(1,1,-1,1,1)
+
+                elif patch_type == 'noSlip':
+                    field_value = field[:,:,self.mesh.face_owners[patch_faces],:]
+                    face_gradients = torch.einsum('btfd,fe->btfed', (-field_value), self.d[patch_faces])*(1/self.d_mag[patch_faces]).reshape(1,1,-1,1,1)
+                    
+                else:
+                    raise NotImplementedError(f'patch type {patch_type} not implemented')
+                
+                gradient = torch.einsum('btfd,fe->btfed', face_gradients.flatten(start_dim=-2), self.delta[patch_faces])
+                grad_field.index_add_(2, self.mesh.face_owners[patch_faces], gradient)
 
         return grad_field
