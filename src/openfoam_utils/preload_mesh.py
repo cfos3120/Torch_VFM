@@ -51,8 +51,8 @@ class preprocessed_OpenFOAM_mesh(object):
         self.internal_face_weights = torch.tensor(parse_openfoam_face_values(f"{case_path}/constant/weights", field_type='auto', internal_only=False), dtype=dtype)
         
         # read in Internal face + non-empty Boundary face values
-        self.mesh.face_areas = torch.empty_like(self.mesh.face_owners, dtype=dtype).reshape(-1,1).repeat(1,dim)
-        self.mesh.cell_center_vectors = torch.empty_like(self.mesh.face_owners, dtype=dtype).reshape(-1,1).repeat(1,dim)
+        self.mesh.face_areas = torch.zeros_like(self.mesh.face_owners, dtype=dtype).reshape(-1,1).repeat(1,dim)
+        self.mesh.cell_center_vectors = torch.zeros_like(self.mesh.face_owners, dtype=dtype).reshape(-1,1).repeat(1,dim)
         
         # allocate them (avoid empty faces)
         self.mesh.patch_face_keys = {}
